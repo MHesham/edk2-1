@@ -165,6 +165,10 @@
 [PcdsFixedAtBuild.AARCH64]
   gEfiMdeModulePkgTokenSpaceGuid.PcdSetNxForStack|TRUE
 
+  # KVM limits it IPA space to 40 bits (1 TB), so there is no need to
+  # support anything bigger, even if the host hardware does
+  gEmbeddedTokenSpaceGuid.PcdPrePiCpuMemorySize|40
+
 [PcdsDynamicDefault.common]
   ## If TRUE, OvmfPkg/AcpiPlatformDxe will not wait for PCI
   #  enumeration to complete before installing ACPI tables.
@@ -229,10 +233,7 @@
   #
   # PEI Phase modules
   #
-  ArmPlatformPkg/PrePeiCore/PrePeiCoreUniCore.inf {
-    <LibraryClasses>
-      ArmPlatformGlobalVariableLib|ArmPlatformPkg/Library/ArmPlatformGlobalVariableLib/Pei/PeiArmPlatformGlobalVariableLib.inf
-  }
+  ArmPlatformPkg/PrePeiCore/PrePeiCoreUniCore.inf
   MdeModulePkg/Core/Pei/PeiMain.inf
   MdeModulePkg/Universal/PCD/Pei/Pcd.inf
   ArmPlatformPkg/PlatformPei/PlatformPeim.inf
@@ -284,7 +285,7 @@
   MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitterDxe.inf
   MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsoleDxe.inf
   MdeModulePkg/Universal/Console/TerminalDxe/TerminalDxe.inf
-  EmbeddedPkg/SerialDxe/SerialDxe.inf
+  MdeModulePkg/Universal/SerialDxe/SerialDxe.inf
 
   MdeModulePkg/Universal/HiiDatabaseDxe/HiiDatabaseDxe.inf
 

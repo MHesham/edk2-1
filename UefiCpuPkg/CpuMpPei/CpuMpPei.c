@@ -61,7 +61,7 @@ SortApicId (
   UINTN             Index2;
   UINTN             Index3;
   UINT32            ApicId;
-  EFI_HEALTH_FLAGS  Health;
+  PEI_CPU_DATA      CpuData;
   UINT32            ApCount;
 
   ApCount = PeiCpuMpData->CpuCount - 1;
@@ -80,11 +80,13 @@ SortApicId (
         }
       }
       if (Index3 != Index1) {
-        PeiCpuMpData->CpuData[Index3].ApicId = PeiCpuMpData->CpuData[Index1].ApicId;
-        PeiCpuMpData->CpuData[Index1].ApicId = ApicId;
-        Health = PeiCpuMpData->CpuData[Index3].Health;
-        PeiCpuMpData->CpuData[Index3].Health = PeiCpuMpData->CpuData[Index1].Health;
-        PeiCpuMpData->CpuData[Index1].Health = Health;
+        CopyMem (&CpuData, &PeiCpuMpData->CpuData[Index3], sizeof (PEI_CPU_DATA));
+        CopyMem (
+          &PeiCpuMpData->CpuData[Index3],
+          &PeiCpuMpData->CpuData[Index1],
+          sizeof (PEI_CPU_DATA)
+          );
+        CopyMem (&PeiCpuMpData->CpuData[Index1], &CpuData, sizeof (PEI_CPU_DATA));
       }
     }
 
@@ -99,6 +101,20 @@ SortApicId (
       }
     }
   }
+}
+
+/**
+  Enable x2APIC mode on APs.
+
+  @param Buffer  Pointer to private data buffer.
+**/
+VOID
+EFIAPI
+ApFuncEnableX2Apic (
+  IN OUT VOID  *Buffer
+  )
+{
+  SetApicMode (LOCAL_APIC_MODE_X2APIC);
 }
 
 /**
@@ -126,10 +142,77 @@ GetMpHobData (
 }
 
 /**
+  Save the volatile registers required to be restored following INIT IPI
+  
+  @param  VolatileRegisters    Returns buffer saved the volatile resisters
+**/
+VOID
+SaveVolatileRegisters (
+  OUT CPU_VOLATILE_REGISTERS    *VolatileRegisters
+  )
+{
+  UINT32                        RegEdx;
+
+  VolatileRegisters->Cr0 = AsmReadCr0 ();
+  VolatileRegisters->Cr3 = AsmReadCr3 ();
+  VolatileRegisters->Cr4 = AsmReadCr4 ();
+
+  AsmCpuid (CPUID_VERSION_INFO, NULL, NULL, NULL, &RegEdx);
+  if ((RegEdx & BIT2) != 0) {
+    //
+    // If processor supports Debugging Extensions feature
+    // by CPUID.[EAX=01H]:EDX.BIT2
+    //
+    VolatileRegisters->Dr0 = AsmReadDr0 ();
+    VolatileRegisters->Dr1 = AsmReadDr1 ();
+    VolatileRegisters->Dr2 = AsmReadDr2 ();
+    VolatileRegisters->Dr3 = AsmReadDr3 ();
+    VolatileRegisters->Dr6 = AsmReadDr6 ();
+    VolatileRegisters->Dr7 = AsmReadDr7 ();
+  }
+}
+
+/**
+  Restore the volatile registers following INIT IPI
+  
+  @param  VolatileRegisters   Pointer to volatile resisters
+  @param  IsRestoreDr         TRUE:  Restore DRx if supported
+                              FALSE: Do not restore DRx
+**/
+VOID
+RestoreVolatileRegisters (
+  IN CPU_VOLATILE_REGISTERS    *VolatileRegisters,
+  IN BOOLEAN                   IsRestoreDr
+  )
+{
+  UINT32                        RegEdx;
+
+  AsmWriteCr0 (VolatileRegisters->Cr0);
+  AsmWriteCr3 (VolatileRegisters->Cr3);
+  AsmWriteCr4 (VolatileRegisters->Cr4);
+
+  if (IsRestoreDr) {
+    AsmCpuid (CPUID_VERSION_INFO, NULL, NULL, NULL, &RegEdx);
+    if ((RegEdx & BIT2) != 0) {
+      //
+      // If processor supports Debugging Extensions feature
+      // by CPUID.[EAX=01H]:EDX.BIT2
+      //
+      AsmWriteDr0 (VolatileRegisters->Dr0);
+      AsmWriteDr1 (VolatileRegisters->Dr1);
+      AsmWriteDr2 (VolatileRegisters->Dr2);
+      AsmWriteDr3 (VolatileRegisters->Dr3);
+      AsmWriteDr6 (VolatileRegisters->Dr6);
+      AsmWriteDr7 (VolatileRegisters->Dr7);
+    }
+  }
+}
+
+/**
   This function will be called from AP reset code if BSP uses WakeUpAP.
 
   @param ExchangeInfo     Pointer to the MP exchange info buffer
-  @param NumApsExecuting  Number of curret executing AP
+  @param NumApsExecuting  Number of current executing AP
 **/
 VOID
 EFIAPI
@@ -145,26 +228,49 @@ ApCFunction (
 
   PeiCpuMpData = ExchangeInfo->PeiCpuMpData;
   if (PeiCpuMpData->InitFlag) {
+    ProcessorNumber = NumApsExecuting;
     //
-    // This is first time AP wakeup, get BIST inforamtion from AP stack
+    // Sync BSP's Control registers to APs
     //
-    BistData = *(UINTN *) (PeiCpuMpData->Buffer + NumApsExecuting * PeiCpuMpData->CpuApStackSize - sizeof (UINTN));
-    PeiCpuMpData->CpuData[NumApsExecuting].ApicId        = GetInitialApicId ();
-    PeiCpuMpData->CpuData[NumApsExecuting].Health.Uint32 = (UINT32) BistData;
+    RestoreVolatileRegisters (&PeiCpuMpData->CpuData[0].VolatileRegisters, FALSE);
+    //
+    // This is first time AP wakeup, get BIST information from AP stack
+    //
+    BistData = *(UINTN *) (PeiCpuMpData->Buffer + ProcessorNumber * PeiCpuMpData->CpuApStackSize - sizeof (UINTN));
+    PeiCpuMpData->CpuData[ProcessorNumber].Health.Uint32 = (UINT32) BistData;
+    PeiCpuMpData->CpuData[ProcessorNumber].ApicId = GetInitialApicId ();
+    if (PeiCpuMpData->CpuData[ProcessorNumber].ApicId >= 0xFF) {
+      //
+      // Set x2APIC mode if there are any logical processor reporting
+      // an APIC ID of 255 or greater.
+      //
+      AcquireSpinLock(&PeiCpuMpData->MpLock);
+      PeiCpuMpData->X2ApicEnable = TRUE;
+      ReleaseSpinLock(&PeiCpuMpData->MpLock);
+    }
     //
     // Sync BSP's Mtrr table to all wakeup APs and load microcode on APs.
     //
     MtrrSetAllMtrrs (&PeiCpuMpData->MtrrTable);
     MicrocodeDetect ();
+    PeiCpuMpData->CpuData[ProcessorNumber].State = CpuStateIdle;
   } else {
     //
     // Execute AP function if AP is not disabled
     //
     GetProcessorNumber (PeiCpuMpData, &ProcessorNumber);
+    //
+    // Restore AP's volatile registers saved
+    //
+    RestoreVolatileRegisters (&PeiCpuMpData->CpuData[ProcessorNumber].VolatileRegisters, TRUE);
+
     if ((PeiCpuMpData->CpuData[ProcessorNumber].State != CpuStateDisabled) &&
         (PeiCpuMpData->ApFunction != 0)) {
       PeiCpuMpData->CpuData[ProcessorNumber].State = CpuStateBusy;
       Procedure = (EFI_AP_PROCEDURE)(UINTN)PeiCpuMpData->ApFunction;
+      //
+      // Invoke AP function here
+      //
       Procedure ((VOID *)(UINTN)PeiCpuMpData->ApFunctionArgument);
       PeiCpuMpData->CpuData[ProcessorNumber].State = CpuStateIdle;
     }
@@ -174,6 +280,11 @@ ApCFunction (
   // AP finished executing C code
   //
   InterlockedIncrement ((UINT32 *)&PeiCpuMpData->FinishedCount);
+
+  //
+  // Save AP volatile registers
+  //
+  SaveVolatileRegisters (&PeiCpuMpData->CpuData[ProcessorNumber].VolatileRegisters);
 
   AsmCliHltLoop ();
 }
@@ -363,17 +474,43 @@ CountProcessorNumber (
   //
   if (PcdGet32 (PcdCpuMaxLogicalProcessorNumber) > 1) {
     //
-    // Send broadcast IPI to APs to wakeup APs
+    // Send 1st broadcast IPI to APs to wakeup APs
     //
-    PeiCpuMpData->InitFlag = 1;
+    PeiCpuMpData->InitFlag     = TRUE;
+    PeiCpuMpData->X2ApicEnable = FALSE;
     WakeUpAP (PeiCpuMpData, TRUE, 0, NULL, NULL);
     //
     // Wait for AP task to complete and then exit.
     //
     MicroSecondDelay (PcdGet32 (PcdCpuApInitTimeOutInMicroSeconds));
-    PeiCpuMpData->InitFlag = 0;
+    PeiCpuMpData->InitFlag  = FALSE;
     PeiCpuMpData->CpuCount += (UINT32)PeiCpuMpData->MpCpuExchangeInfo->NumApsExecuting;
     ASSERT (PeiCpuMpData->CpuCount <= PcdGet32 (PcdCpuMaxLogicalProcessorNumber));
+    //
+    // Wait for all APs finished the initialization
+    //
+    while (PeiCpuMpData->FinishedCount < (PeiCpuMpData->CpuCount - 1)) {
+      CpuPause ();
+    }
+
+    if (PeiCpuMpData->X2ApicEnable) {
+      DEBUG ((EFI_D_INFO, "Force x2APIC mode!\n"));
+      //
+      // Send 2nd broadcast IPI to all APs to enable x2APIC mode
+      //
+      WakeUpAP (PeiCpuMpData, TRUE, 0, ApFuncEnableX2Apic, NULL);
+      //
+      // Wait for all known APs finished
+      //
+      while (PeiCpuMpData->FinishedCount < (PeiCpuMpData->CpuCount - 1)) {
+        CpuPause ();
+      }
+      //
+      // Enable x2APIC on BSP
+      //
+      SetApicMode (LOCAL_APIC_MODE_X2APIC);
+    }
+    DEBUG ((EFI_D_INFO, "APIC MODE is %d\n", GetApicMode ()));
     //
     // Sort BSP/Aps by CPU APIC ID in ascending order
     //
@@ -439,6 +576,8 @@ PrepareAPStartupVector (
   PeiCpuMpData->CpuData[0].ApicId        = GetInitialApicId ();
   PeiCpuMpData->CpuData[0].Health.Uint32 = 0;
   PeiCpuMpData->EndOfPeiFlag             = FALSE;
+  InitializeSpinLock(&PeiCpuMpData->MpLock);
+  SaveVolatileRegisters (&PeiCpuMpData->CpuData[0].VolatileRegisters);
   CopyMem (&PeiCpuMpData->AddressMap, &AddressMap, sizeof (MP_ASSEMBLY_ADDRESS_MAP));
 
   //
@@ -476,7 +615,7 @@ CpuMpEndOfPeiCallback (
   EFI_PEI_HOB_POINTERS      Hob;
   EFI_HOB_MEMORY_ALLOCATION *MemoryHob;
 
-  DEBUG ((EFI_D_INFO, "CpuMpPei: CpuMpEndOfPeiCallback () invokded\n"));
+  DEBUG ((EFI_D_INFO, "CpuMpPei: CpuMpEndOfPeiCallback () invoked\n"));
 
   Status = PeiServicesGetBootMode (&BootMode);
   ASSERT_EFI_ERROR (Status);

@@ -114,16 +114,30 @@ typedef struct {
 #pragma pack()
 
 typedef struct {
+  UINTN                          Cr0;
+  UINTN                          Cr3;
+  UINTN                          Cr4;
+  UINTN                          Dr0;
+  UINTN                          Dr1;
+  UINTN                          Dr2;
+  UINTN                          Dr3;
+  UINTN                          Dr6;
+  UINTN                          Dr7;
+} CPU_VOLATILE_REGISTERS;
+
+typedef struct {
   UINT32                         ApicId;
   EFI_HEALTH_FLAGS               Health;
   CPU_STATE                      State;
   BOOLEAN                        CpuHealthy;
+  CPU_VOLATILE_REGISTERS         VolatileRegisters;
 } PEI_CPU_DATA;
 
 //
 // PEI CPU MP Data save in memory
 //
 struct _PEI_CPU_MP_DATA {
+  SPIN_LOCK                      MpLock;
   UINT32                         CpuCount;
   UINT32                         BspNumber;
   UINTN                          Buffer;
@@ -137,6 +151,7 @@ struct _PEI_CPU_MP_DATA {
   volatile UINT32                FinishedCount;
   BOOLEAN                        EndOfPeiFlag;
   BOOLEAN                        InitFlag;
+  BOOLEAN                        X2ApicEnable;
   CPU_EXCHANGE_ROLE_INFO         BSPInfo;
   CPU_EXCHANGE_ROLE_INFO         APInfo;
   MTRR_SETTINGS                  MtrrTable;

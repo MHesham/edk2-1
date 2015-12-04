@@ -25,6 +25,7 @@
 #include <Library/PcdLib.h>
 #include <Library/ArmLib.h>
 #include <Library/DxeServicesTableLib.h>
+#include <Library/CacheMaintenanceLib.h>
 
 VOID *
 UncachedInternalAllocatePages (
@@ -96,6 +97,7 @@ AllocatePagesFromList (
   //
   // Look in our list for the smallest page that could satisfy the new allocation
   //
+  Node = NULL;
   NewNode = NULL;
   for (Link = mPageList.ForwardLink; Link != &mPageList; Link = Link->ForwardLink) {
     Node = BASE_CR (Link, FREE_PAGE_NODE, Link);
@@ -164,6 +166,8 @@ AllocatePagesFromList (
     gBS->FreePages (Memory, Pages);
     return Status;
   }
+
+  InvalidateDataCacheRange ((VOID *)(UINTN)Memory, EFI_PAGES_TO_SIZE (Pages));
 
   NewNode = AllocatePool (sizeof (FREE_PAGE_NODE));
   if (NewNode == NULL) {

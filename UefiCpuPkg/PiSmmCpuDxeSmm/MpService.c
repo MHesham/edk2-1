@@ -412,15 +412,9 @@ BSPHandler (
   AcquireSpinLockOrFail (&mSmmMpSyncData->CpuData[CpuIndex].Busy);
 
   //
-  // Restore SMM Configuration in S3 boot path.
+  // Perform the pre tasks
   //
-  if (mRestoreSmmConfigurationInS3) {
-    //
-    // Configure SMM Code Access Check feature if available.
-    //
-    ConfigSmmCodeAccessCheck ();
-    mRestoreSmmConfigurationInS3 = FALSE;
-  }
+  PerformPreTasks ();
 
   //
   // Invoke SMM Foundation EntryPoint with the processor information context.
@@ -738,12 +732,14 @@ APHandler (
   Create 4G PageTable in SMRAM.
 
   @param          ExtraPages       Additional page numbers besides for 4G memory
+  @param          Is32BitPageTable Whether the page table is 32-bit PAE
   @return         PageTable Address
 
 **/
 UINT32
 Gen4GPageTable (
-  IN      UINTN                     ExtraPages
+  IN      UINTN                     ExtraPages,
+  IN      BOOLEAN                   Is32BitPageTable
   )
 {
   VOID    *PageTable;
@@ -776,7 +772,7 @@ Gen4GPageTable (
   //
   // Allocate the page table
   //
-  PageTable = AllocatePages (ExtraPages + 5 + PagesNeeded);
+  PageTable = AllocatePageTableMemory (ExtraPages + 5 + PagesNeeded);
   ASSERT (PageTable != NULL);
 
   PageTable = (VOID *)((UINTN)PageTable + EFI_PAGES_TO_SIZE (ExtraPages));
@@ -791,7 +787,7 @@ Gen4GPageTable (
   // Set Page Directory Pointers
   //
   for (Index = 0; Index < 4; Index++) {
-    Pte[Index] = (UINTN)PageTable + EFI_PAGE_SIZE * (Index + 1) + IA32_PG_P;
+    Pte[Index] = (UINTN)PageTable + EFI_PAGE_SIZE * (Index + 1) + (Is32BitPageTable ? IA32_PAE_PDPTE_ATTRIBUTE_BITS : PAGE_ATTRIBUTE_BITS);
   }
   Pte += EFI_PAGE_SIZE / sizeof (*Pte);
 
@@ -799,7 +795,7 @@ Gen4GPageTable (
   // Fill in Page Directory Entries
   //
   for (Index = 0; Index < EFI_PAGE_SIZE * 4 / sizeof (*Pte); Index++) {
-    Pte[Index] = (Index << 21) + IA32_PG_PS + IA32_PG_RW + IA32_PG_P;
+    Pte[Index] = (Index << 21) | IA32_PG_PS | PAGE_ATTRIBUTE_BITS;
   }
 
   if (FeaturePcdGet (PcdCpuSmmStackGuard)) {
@@ -808,7 +804,7 @@ Gen4GPageTable (
     Pdpte = (UINT64*)PageTable;
     for (PageIndex = Low2MBoundary; PageIndex <= High2MBoundary; PageIndex += SIZE_2MB) {
       Pte = (UINT64*)(UINTN)(Pdpte[BitFieldRead32 ((UINT32)PageIndex, 30, 31)] & ~(EFI_PAGE_SIZE - 1));
-      Pte[BitFieldRead32 ((UINT32)PageIndex, 21, 29)] = (UINT64)Pages + IA32_PG_RW + IA32_PG_P;
+      Pte[BitFieldRead32 ((UINT32)PageIndex, 21, 29)] = (UINT64)Pages | PAGE_ATTRIBUTE_BITS;
       //
       // Fill in Page Table Entries
       //
@@ -825,7 +821,7 @@ Gen4GPageTable (
             GuardPage = 0;
           }
         } else {
-          Pte[Index] = PageAddress + IA32_PG_RW + IA32_PG_P;
+          Pte[Index] = PageAddress | PAGE_ATTRIBUTE_BITS;
         }
         PageAddress+= EFI_PAGE_SIZE;
       }
@@ -878,7 +874,7 @@ SetCacheability (
     //
     // Allocate a page from SMRAM
     //
-    NewPageTableAddress = AllocatePages (1);
+    NewPageTableAddress = AllocatePageTableMemory (1);
     ASSERT (NewPageTableAddress != NULL);
 
     NewPageTable = (UINT64 *)NewPageTableAddress;
@@ -892,7 +888,7 @@ SetCacheability (
       NewPageTable[Index] |= (UINT64)(Index << EFI_PAGE_SHIFT);
     }
 
-    PageTable[PTIndex] = ((UINTN)NewPageTableAddress & gPhyMask) | IA32_PG_P;
+    PageTable[PTIndex] = ((UINTN)NewPageTableAddress & gPhyMask) | PAGE_ATTRIBUTE_BITS;
   }
 
   ASSERT (PageTable[PTIndex] & IA32_PG_P);
@@ -944,6 +940,65 @@ SmmStartupThisAp (
     ReleaseSpinLock (&mSmmMpSyncData->CpuData[CpuIndex].Busy);
   }
   return EFI_SUCCESS;
+}
+
+/**
+  This funciton sets DR6 & DR7 according to SMM save state, before running SMM C code.
+  They are useful when you want to enable hardware breakpoints in SMM without entry SMM mode.
+
+  NOTE: It might not be appreciated in runtime since it might
+        conflict with OS debugging facilities. Turn them off in RELEASE.
+
+  @param    CpuIndex              CPU Index
+
+**/
+VOID
+EFIAPI
+CpuSmmDebugEntry (
+  IN UINTN  CpuIndex
+  )
+{
+  SMRAM_SAVE_STATE_MAP *CpuSaveState;
+  
+  if (FeaturePcdGet (PcdCpuSmmDebug)) {
+    CpuSaveState = (SMRAM_SAVE_STATE_MAP *)gSmst->CpuSaveState[CpuIndex];
+    if (mSmmSaveStateRegisterLma == EFI_SMM_SAVE_STATE_REGISTER_LMA_32BIT) {
+      AsmWriteDr6 (CpuSaveState->x86._DR6);
+      AsmWriteDr7 (CpuSaveState->x86._DR7);
+    } else {
+      AsmWriteDr6 ((UINTN)CpuSaveState->x64._DR6);
+      AsmWriteDr7 ((UINTN)CpuSaveState->x64._DR7);
+    }
+  }
+}
+
+/**
+  This funciton restores DR6 & DR7 to SMM save state.
+
+  NOTE: It might not be appreciated in runtime since it might
+        conflict with OS debugging facilities. Turn them off in RELEASE.
+
+  @param    CpuIndex              CPU Index
+
+**/
+VOID
+EFIAPI
+CpuSmmDebugExit (
+  IN UINTN  CpuIndex
+  )
+{
+  SMRAM_SAVE_STATE_MAP *CpuSaveState;
+
+  if (FeaturePcdGet (PcdCpuSmmDebug)) {
+    CpuSaveState = (SMRAM_SAVE_STATE_MAP *)gSmst->CpuSaveState[CpuIndex];
+    if (mSmmSaveStateRegisterLma == EFI_SMM_SAVE_STATE_REGISTER_LMA_32BIT) {
+      CpuSaveState->x86._DR7 = (UINT32)AsmReadDr7 ();
+      CpuSaveState->x86._DR6 = (UINT32)AsmReadDr6 ();
+    } else {
+      CpuSaveState->x64._DR7 = AsmReadDr7 ();
+      CpuSaveState->x64._DR6 = AsmReadDr6 ();
+    }
+  }
 }
 
 /**
@@ -1163,10 +1218,7 @@ InitializeMpServiceData (
   UINTN                     Index;
   MTRR_SETTINGS             *Mtrr;
   PROCESSOR_SMM_DESCRIPTOR  *Psd;
-  UINTN                     GdtTssTableSize;
   UINT8                     *GdtTssTables;
-  IA32_SEGMENT_DESCRIPTOR   *GdtDescriptor;
-  UINTN                     TssBase;
   UINTN                     GdtTableStepSize;
 
   //
@@ -1182,71 +1234,7 @@ InitializeMpServiceData (
   //
   Cr3 = SmmInitPageTable ();
 
-  GdtTssTables    = NULL;
-  GdtTssTableSize = 0;
-  GdtTableStepSize = 0;
-  //
-  // For X64 SMM, we allocate separate GDT/TSS for each CPUs to avoid TSS load contention
-  // on each SMI entry.
-  //
-  if (EFI_IMAGE_MACHINE_TYPE_SUPPORTED(EFI_IMAGE_MACHINE_X64)) {
-    GdtTssTableSize = (gcSmiGdtr.Limit + 1 + TSS_SIZE + 7) & ~7; // 8 bytes aligned
-    GdtTssTables = (UINT8*)AllocatePages (EFI_SIZE_TO_PAGES (GdtTssTableSize * gSmmCpuPrivate->SmmCoreEntryContext.NumberOfCpus));
-    ASSERT (GdtTssTables != NULL);
-    GdtTableStepSize = GdtTssTableSize;
-
-    for (Index = 0; Index < gSmmCpuPrivate->SmmCoreEntryContext.NumberOfCpus; Index++) {
-      CopyMem (GdtTssTables + GdtTableStepSize * Index, (VOID*)(UINTN)gcSmiGdtr.Base, gcSmiGdtr.Limit + 1 + TSS_SIZE);
-      if (FeaturePcdGet (PcdCpuSmmStackGuard)) {
-        //
-        // Setup top of known good stack as IST1 for each processor.
-        //
-        *(UINTN *)(GdtTssTables + GdtTableStepSize * Index + gcSmiGdtr.Limit + 1 + TSS_X64_IST1_OFFSET) = (mSmmStackArrayBase + EFI_PAGE_SIZE + Index * mSmmStackSize);
-      }
-    }
-  } else if (FeaturePcdGet (PcdCpuSmmStackGuard)) {
-
-    //
-    // For IA32 SMM, if SMM Stack Guard feature is enabled, we use 2 TSS.
-    // in this case, we allocate separate GDT/TSS for each CPUs to avoid TSS load contention
-    // on each SMI entry.
-    //
-
-    //
-    // Enlarge GDT to contain 2 TSS descriptors
-    //
-    gcSmiGdtr.Limit += (UINT16)(2 * sizeof (IA32_SEGMENT_DESCRIPTOR));
-
-    GdtTssTableSize = (gcSmiGdtr.Limit + 1 + TSS_SIZE * 2 + 7) & ~7; // 8 bytes aligned
-    GdtTssTables = (UINT8*)AllocatePages (EFI_SIZE_TO_PAGES (GdtTssTableSize * gSmmCpuPrivate->SmmCoreEntryContext.NumberOfCpus));
-    ASSERT (GdtTssTables != NULL);
-    GdtTableStepSize = GdtTssTableSize;
-
-    for (Index = 0; Index < gSmmCpuPrivate->SmmCoreEntryContext.NumberOfCpus; Index++) {
-      CopyMem (GdtTssTables + GdtTableStepSize * Index, (VOID*)(UINTN)gcSmiGdtr.Base, gcSmiGdtr.Limit + 1 + TSS_SIZE * 2);
-      //
-      // Fixup TSS descriptors
-      //
-      TssBase = (UINTN)(GdtTssTables + GdtTableStepSize * Index + gcSmiGdtr.Limit + 1);
-      GdtDescriptor = (IA32_SEGMENT_DESCRIPTOR *)(TssBase) - 2;
-      GdtDescriptor->Bits.BaseLow = (UINT16)TssBase;
-      GdtDescriptor->Bits.BaseMid = (UINT8)(TssBase >> 16);
-      GdtDescriptor->Bits.BaseHigh = (UINT8)(TssBase >> 24);
-
-      TssBase += TSS_SIZE;
-      GdtDescriptor++;
-      GdtDescriptor->Bits.BaseLow = (UINT16)TssBase;
-      GdtDescriptor->Bits.BaseMid = (UINT8)(TssBase >> 16);
-      GdtDescriptor->Bits.BaseHigh = (UINT8)(TssBase >> 24);
-      //
-      // Fixup TSS segments
-      //
-      // ESP as known good stack
-      //
-      *(UINTN *)(TssBase + TSS_IA32_ESP_OFFSET) =  mSmmStackArrayBase + EFI_PAGE_SIZE + Index * mSmmStackSize;
-      *(UINT32 *)(TssBase + TSS_IA32_CR3_OFFSET) = Cr3;
-    }
-  }
+  GdtTssTables = InitGdt (Cr3, &GdtTableStepSize);
 
   //
   // Initialize PROCESSOR_SMM_DESCRIPTOR for each CPU
@@ -1254,18 +1242,8 @@ InitializeMpServiceData (
   for (Index = 0; Index < mMaxNumberOfCpus; Index++) {
     Psd = (PROCESSOR_SMM_DESCRIPTOR *)(VOID *)(UINTN)(mCpuHotPlugData.SmBase[Index] + SMM_PSD_OFFSET);
     CopyMem (Psd, &gcPsd, sizeof (gcPsd));
-    if (EFI_IMAGE_MACHINE_TYPE_SUPPORTED (EFI_IMAGE_MACHINE_X64)) {
-      //
-      // For X64 SMM, set GDT to the copy allocated above.
-      //
-      Psd->SmmGdtPtr = (UINT64)(UINTN)(GdtTssTables + GdtTableStepSize * Index);
-    } else if (FeaturePcdGet (PcdCpuSmmStackGuard)) {
-      //
-      // For IA32 SMM, if SMM Stack Guard feature is enabled, set GDT to the copy allocated above.
-      //
-      Psd->SmmGdtPtr = (UINT64)(UINTN)(GdtTssTables + GdtTableStepSize * Index);
-      Psd->SmmGdtSize = gcSmiGdtr.Limit + 1;
-    }
+    Psd->SmmGdtPtr = (UINT64)(UINTN)(GdtTssTables + GdtTableStepSize * Index);
+    Psd->SmmGdtSize = gcSmiGdtr.Limit + 1;
 
     //
     // Install SMI handler
