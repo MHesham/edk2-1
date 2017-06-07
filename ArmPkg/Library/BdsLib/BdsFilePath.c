@@ -752,14 +752,14 @@ BdsPxeLoadImage (
     return Status;
   }
 
-  Status = LoadFileProtocol->LoadFile (LoadFileProtocol, *DevicePath, TRUE, &BufferSize, NULL);
+  Status = LoadFileProtocol->LoadFile (LoadFileProtocol, RemainingDevicePath, TRUE, &BufferSize, NULL);
   if (Status == EFI_BUFFER_TOO_SMALL) {
     Status = gBS->AllocatePages (Type, EfiBootServicesCode, EFI_SIZE_TO_PAGES(BufferSize), Image);
     if (EFI_ERROR (Status)) {
       return Status;
     }
 
-    Status = LoadFileProtocol->LoadFile (LoadFileProtocol, *DevicePath, TRUE, &BufferSize, (VOID*)(UINTN)(*Image));
+    Status = LoadFileProtocol->LoadFile (LoadFileProtocol, RemainingDevicePath, TRUE, &BufferSize, (VOID*)(UINTN)(*Image));
     if (!EFI_ERROR (Status) && (ImageSize != NULL)) {
       *ImageSize = BufferSize;
     }
@@ -964,7 +964,7 @@ Mtftp4CheckPacket (
       Step      = (Context->DownloadedNbOfBytes   * TFTP_PROGRESS_SLIDER_STEPS) / Context->FileSize;
       if (Step > LastStep) {
         Print (mTftpProgressDelete);
-        StrCpy (Progress, mTftpProgressFrame);
+        CopyMem (Progress, mTftpProgressFrame, sizeof mTftpProgressFrame);
         for (Index = 1; Index < Step; Index++) {
           Progress[Index] = L'=';
         }
@@ -1044,6 +1044,7 @@ BdsTftpLoadImage (
   UINT64                   FileSize;
   UINT64                   TftpBufferSize;
   BDS_TFTP_CONTEXT         *TftpContext;
+  UINTN                    PathNameLen;
 
   ASSERT(IS_DEVICE_PATH_NODE (RemainingDevicePath, MESSAGING_DEVICE_PATH, MSG_IPv4_DP));
   IPv4DevicePathNode = (IPv4_DEVICE_PATH*)RemainingDevicePath;
@@ -1187,8 +1188,9 @@ BdsTftpLoadImage (
 
   // The Device Path might contain multiple FilePath nodes
   PathName      = ConvertDevicePathToText ((EFI_DEVICE_PATH_PROTOCOL*)(IPv4DevicePathNode + 1), FALSE, FALSE);
-  AsciiFilePath = AllocatePool (StrLen (PathName) + 1);
-  UnicodeStrToAsciiStr (PathName, AsciiFilePath);
+  PathNameLen   = StrLen (PathName) + 1;
+  AsciiFilePath = AllocatePool (PathNameLen);
+  UnicodeStrToAsciiStrS (PathName, AsciiFilePath, PathNameLen);
 
   //
   // Try to get the size of the file in bytes from the server. If it fails,

@@ -1,7 +1,7 @@
 /** @file
 
   Copyright (c) 2008 - 2009, Apple Inc. All rights reserved.<BR>
-  Copyright (c) 2011 - 2015, ARM Ltd. All rights reserved.<BR>
+  Copyright (c) 2011 - 2016, ARM Ltd. All rights reserved.<BR>
 
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
@@ -25,6 +25,10 @@
 #else
  #error "Unknown chipset."
 #endif
+
+#define EFI_MEMORY_CACHETYPE_MASK   (EFI_MEMORY_UC | EFI_MEMORY_WC | \
+                                     EFI_MEMORY_WT | EFI_MEMORY_WB | \
+                                     EFI_MEMORY_UCE)
 
 /**
  * The UEFI firmware must not use the ARM_MEMORY_REGION_ATTRIBUTE_NONSECURE_* attributes.
@@ -183,9 +187,21 @@ ArmInvalidateDataCacheEntryByMVA (
 
 VOID
 EFIAPI
-ArmCleanDataCacheEntryByMVA (
+ArmCleanDataCacheEntryToPoUByMVA (
   IN  UINTN   Address
   );
+
+VOID
+EFIAPI
+ArmInvalidateInstructionCacheEntryToPoUByMVA (
+  IN  UINTN   Address
+  );
+
+VOID
+EFIAPI
+ArmCleanDataCacheEntryByMVA (
+IN  UINTN   Address
+);
 
 VOID
 EFIAPI
@@ -347,18 +363,16 @@ ArmSetTTBR0 (
   IN  VOID  *TranslationTableBase
   );
 
+VOID
+EFIAPI
+ArmSetTTBCR (
+  IN  UINT32 Bits
+  );
+
 VOID *
 EFIAPI
 ArmGetTTBR0BaseAddress (
   VOID
-  );
-
-RETURN_STATUS
-EFIAPI
-ArmConfigureMmu (
-  IN  ARM_MEMORY_REGION_DESCRIPTOR  *MemoryTable,
-  OUT VOID                         **TranslationTableBase OPTIONAL,
-  OUT UINTN                         *TranslationTableSize  OPTIONAL
   );
 
 BOOLEAN
@@ -577,28 +591,132 @@ ArmUnsetCpuActlrBit (
   IN  UINTN    Bits
   );
 
-RETURN_STATUS
-ArmSetMemoryRegionNoExec (
-  IN  EFI_PHYSICAL_ADDRESS      BaseAddress,
-  IN  UINT64                    Length
+//
+// Accessors for the architected generic timer registers
+//
+
+#define ARM_ARCH_TIMER_ENABLE           (1 << 0)
+#define ARM_ARCH_TIMER_IMASK            (1 << 1)
+#define ARM_ARCH_TIMER_ISTATUS          (1 << 2)
+
+UINTN
+EFIAPI
+ArmReadCntFrq (
+  VOID
   );
 
-RETURN_STATUS
-ArmClearMemoryRegionNoExec (
-  IN  EFI_PHYSICAL_ADDRESS      BaseAddress,
-  IN  UINT64                    Length
+VOID
+EFIAPI
+ArmWriteCntFrq (
+  UINTN   FreqInHz
   );
 
-RETURN_STATUS
-ArmSetMemoryRegionReadOnly (
-  IN  EFI_PHYSICAL_ADDRESS      BaseAddress,
-  IN  UINT64                    Length
+UINT64
+EFIAPI
+ArmReadCntPct (
+  VOID
   );
 
-RETURN_STATUS
-ArmClearMemoryRegionReadOnly (
-  IN  EFI_PHYSICAL_ADDRESS      BaseAddress,
-  IN  UINT64                    Length
+UINTN
+EFIAPI
+ArmReadCntkCtl (
+  VOID
+  );
+
+VOID
+EFIAPI
+ArmWriteCntkCtl (
+  UINTN   Val
+  );
+
+UINTN
+EFIAPI
+ArmReadCntpTval (
+  VOID
+  );
+
+VOID
+EFIAPI
+ArmWriteCntpTval (
+  UINTN   Val
+  );
+
+UINTN
+EFIAPI
+ArmReadCntpCtl (
+  VOID
+  );
+
+VOID
+EFIAPI
+ArmWriteCntpCtl (
+  UINTN   Val
+  );
+
+UINTN
+EFIAPI
+ArmReadCntvTval (
+  VOID
+  );
+
+VOID
+EFIAPI
+ArmWriteCntvTval (
+  UINTN   Val
+  );
+
+UINTN
+EFIAPI
+ArmReadCntvCtl (
+  VOID
+  );
+
+VOID
+EFIAPI
+ArmWriteCntvCtl (
+  UINTN   Val
+  );
+
+UINT64
+EFIAPI
+ArmReadCntvCt (
+  VOID
+  );
+
+UINT64
+EFIAPI
+ArmReadCntpCval (
+  VOID
+  );
+
+VOID
+EFIAPI
+ArmWriteCntpCval (
+  UINT64   Val
+  );
+
+UINT64
+EFIAPI
+ArmReadCntvCval (
+  VOID
+  );
+
+VOID
+EFIAPI
+ArmWriteCntvCval (
+  UINT64   Val
+  );
+
+UINT64
+EFIAPI
+ArmReadCntvOff (
+  VOID
+  );
+
+VOID
+EFIAPI
+ArmWriteCntvOff (
+  UINT64   Val
   );
 
 #endif // __ARM_LIB__

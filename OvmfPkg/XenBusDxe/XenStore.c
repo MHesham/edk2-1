@@ -10,7 +10,7 @@
 
   The XenStore is ASCII string based, and has a structure and semantics
   similar to a filesystem.  There are files and directories, the directories
-  able to contain files or other directories.  The depth of the hierachy
+  able to contain files or other directories.  The depth of the hierarchy
   is only limited by the XenStore's maximum path length.
 
   The communication channel between the XenStore service and other
@@ -303,14 +303,17 @@ XenStoreJoin (
   )
 {
   CHAR8 *Buf;
+  UINTN BufSize;
 
   /* +1 for '/' and +1 for '\0' */
-  Buf = AllocateZeroPool (
-          AsciiStrLen (DirectoryPath) + AsciiStrLen (Node) + 2);
-  AsciiStrCat (Buf, DirectoryPath);
-  if (Node[0] != '\0') {
-    AsciiStrCat (Buf, "/");
-    AsciiStrCat (Buf, Node);
+  BufSize = AsciiStrLen (DirectoryPath) + AsciiStrLen (Node) + 2;
+  Buf = AllocatePool (BufSize);
+  ASSERT (Buf != NULL);
+
+  if (Node[0] == '\0') {
+    AsciiSPrint (Buf, BufSize, "%a", DirectoryPath);
+  } else {
+    AsciiSPrint (Buf, BufSize, "%a/%a", DirectoryPath, Node);
   }
 
   return Buf;
@@ -710,7 +713,6 @@ static XenStoreErrors gXenStoreErrors[] = {
   { XENSTORE_STATUS_EISCONN, "EISCONN" },
   { XENSTORE_STATUS_E2BIG, "E2BIG" }
 };
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 
 STATIC
 XENSTORE_STATUS
@@ -992,9 +994,9 @@ NotifyEventChannelCheckForEvent (
   IN VOID *Context
   )
 {
-  XENSTORE_PRIVATE *xs;
-  xs = (XENSTORE_PRIVATE *)Context;
-  if (TestAndClearBit (xs->EventChannel, xs->Dev->SharedInfo->evtchn_pending)) {
+  XENSTORE_PRIVATE *xsp;
+  xsp = (XENSTORE_PRIVATE *)Context;
+  if (TestAndClearBit (xsp->EventChannel, xsp->Dev->SharedInfo->evtchn_pending)) {
     gBS->SignalEvent (Event);
   }
 }
@@ -1007,12 +1009,12 @@ NotifyEventChannelCheckForEvent (
 STATIC
 EFI_STATUS
 XenStoreInitComms (
-  XENSTORE_PRIVATE *xs
+  XENSTORE_PRIVATE *xsp
   )
 {
   EFI_STATUS Status;
   EFI_EVENT TimerEvent;
-  struct xenstore_domain_interface *XenStore = xs->XenStore;
+  struct xenstore_domain_interface *XenStore = xsp->XenStore;
 
   Status = gBS->CreateEvent (EVT_TIMER, 0, NULL, NULL, &TimerEvent);
   Status = gBS->SetTimer (TimerEvent, TimerRelative,
@@ -1029,8 +1031,8 @@ XenStoreInitComms (
   gBS->CloseEvent (TimerEvent);
 
   Status = gBS->CreateEvent (EVT_NOTIFY_WAIT, TPL_NOTIFY,
-                             NotifyEventChannelCheckForEvent, xs,
-                             &xs->EventChannelEvent);
+                             NotifyEventChannelCheckForEvent, xsp,
+                             &xsp->EventChannelEvent);
   ASSERT_EFI_ERROR (Status);
 
   return Status;
@@ -1073,9 +1075,6 @@ XenStoreInit (
 
   /* Initialize the shared memory rings to talk to xenstored */
   Status = XenStoreInitComms (&xs);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
 
   return Status;
 }
@@ -1298,16 +1297,14 @@ XenStoreTransactionEnd (
 {
   CHAR8 AbortStr[2];
 
-  if (Abort) {
-    AsciiStrCpy (AbortStr, "F");
-  } else {
-    AsciiStrCpy (AbortStr, "T");
-  }
+  AbortStr[0] = Abort ? 'F' : 'T';
+  AbortStr[1] = '\0';
 
   return XenStoreSingle (Transaction, XS_TRANSACTION_END, AbortStr, NULL, NULL);
 }
 
 XENSTORE_STATUS
+EFIAPI
 XenStoreVSPrint (
   IN CONST XENSTORE_TRANSACTION *Transaction,
   IN CONST CHAR8           *DirectoryPath,
@@ -1319,8 +1316,11 @@ XenStoreVSPrint (
   CHAR8 *Buf;
   XENSTORE_STATUS Status;
   UINTN BufSize;
+  VA_LIST Marker2;
 
-  BufSize = SPrintLengthAsciiFormat (FormatString, Marker) + 1;
+  VA_COPY (Marker2, Marker);
+  BufSize = SPrintLengthAsciiFormat (FormatString, Marker2) + 1;
+  VA_END (Marker2);
   Buf = AllocateZeroPool (BufSize);
   AsciiVSPrint (Buf, BufSize, FormatString, Marker);
   Status = XenStoreWrite (Transaction, DirectoryPath, Node, Buf);

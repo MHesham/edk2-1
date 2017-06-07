@@ -36,6 +36,8 @@
 
 #include <Drivers/PL031RealTimeClock.h>
 
+#include <Library/TimeBaseLib.h>
+
 #include <ArmPlatform.h>
 
 STATIC CONST CHAR16           mTimeZoneVariableName[] = L"PL031RtcTimeZone";
@@ -43,7 +45,6 @@ STATIC CONST CHAR16           mDaylightVariableName[] = L"PL031RtcDaylight";
 STATIC BOOLEAN                mPL031Initialized = FALSE;
 STATIC EFI_EVENT              mRtcVirtualAddrChangeEvent;
 STATIC UINTN                  mPL031RtcBase;
-STATIC EFI_RUNTIME_SERVICES   *mRT;
 
 EFI_STATUS
 IdentifyPL031 (
@@ -111,129 +112,6 @@ InitializePL031 (
 }
 
 /**
-  Converts Epoch seconds (elapsed since 1970 JANUARY 01, 00:00:00 UTC) to EFI_TIME
- **/
-VOID
-EpochToEfiTime (
-  IN  UINTN     EpochSeconds,
-  OUT EFI_TIME  *Time
-  )
-{
-  UINTN         a;
-  UINTN         b;
-  UINTN         c;
-  UINTN         d;
-  UINTN         g;
-  UINTN         j;
-  UINTN         m;
-  UINTN         y;
-  UINTN         da;
-  UINTN         db;
-  UINTN         dc;
-  UINTN         dg;
-  UINTN         hh;
-  UINTN         mm;
-  UINTN         ss;
-  UINTN         J;
-
-  J  = (EpochSeconds / 86400) + 2440588;
-  j  = J + 32044;
-  g  = j / 146097;
-  dg = j % 146097;
-  c  = (((dg / 36524) + 1) * 3) / 4;
-  dc = dg - (c * 36524);
-  b  = dc / 1461;
-  db = dc % 1461;
-  a  = (((db / 365) + 1) * 3) / 4;
-  da = db - (a * 365);
-  y  = (g * 400) + (c * 100) + (b * 4) + a;
-  m  = (((da * 5) + 308) / 153) - 2;
-  d  = da - (((m + 4) * 153) / 5) + 122;
-
-  Time->Year  = y - 4800 + ((m + 2) / 12);
-  Time->Month = ((m + 2) % 12) + 1;
-  Time->Day   = d + 1;
-
-  ss = EpochSeconds % 60;
-  a  = (EpochSeconds - ss) / 60;
-  mm = a % 60;
-  b = (a - mm) / 60;
-  hh = b % 24;
-
-  Time->Hour        = hh;
-  Time->Minute      = mm;
-  Time->Second      = ss;
-  Time->Nanosecond  = 0;
-
-}
-
-/**
-  Converts EFI_TIME to Epoch seconds (elapsed since 1970 JANUARY 01, 00:00:00 UTC)
- **/
-UINTN
-EfiTimeToEpoch (
-  IN  EFI_TIME  *Time
-  )
-{
-  UINTN a;
-  UINTN y;
-  UINTN m;
-  UINTN JulianDate;  // Absolute Julian Date representation of the supplied Time
-  UINTN EpochDays;   // Number of days elapsed since EPOCH_JULIAN_DAY
-  UINTN EpochSeconds;
-
-  a = (14 - Time->Month) / 12 ;
-  y = Time->Year + 4800 - a;
-  m = Time->Month + (12*a) - 3;
-
-  JulianDate = Time->Day + ((153*m + 2)/5) + (365*y) + (y/4) - (y/100) + (y/400) - 32045;
-
-  ASSERT (JulianDate >= EPOCH_JULIAN_DATE);
-  EpochDays = JulianDate - EPOCH_JULIAN_DATE;
-
-  EpochSeconds = (EpochDays * SEC_PER_DAY) + ((UINTN)Time->Hour * SEC_PER_HOUR) + (Time->Minute * SEC_PER_MIN) + Time->Second;
-
-  return EpochSeconds;
-}
-
-BOOLEAN
-IsLeapYear (
-  IN EFI_TIME   *Time
-  )
-{
-  if (Time->Year % 4 == 0) {
-    if (Time->Year % 100 == 0) {
-      if (Time->Year % 400 == 0) {
-        return TRUE;
-      } else {
-        return FALSE;
-      }
-    } else {
-      return TRUE;
-    }
-  } else {
-    return FALSE;
-  }
-}
-
-BOOLEAN
-DayValid (
-  IN  EFI_TIME  *Time
-  )
-{
-  STATIC CONST INTN DayOfMonth[12] = { 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-
-  if (Time->Day < 1 ||
-      Time->Day > DayOfMonth[Time->Month - 1] ||
-      (Time->Month == 2 && (!IsLeapYear (Time) && Time->Day > 28))
-     ) {
-    return FALSE;
-  }
-
-  return TRUE;
-}
-
-/**
   Returns the current time and date information, and the time-keeping capabilities
   of the hardware platform.
 
@@ -293,7 +171,7 @@ LibGetTime (
 
   // Get the current time zone information from non-volatile storage
   Size = sizeof (TimeZone);
-  Status = mRT->GetVariable (
+  Status = EfiGetVariable (
                   (CHAR16 *)mTimeZoneVariableName,
                   &gEfiCallerIdGuid,
                   NULL,
@@ -311,7 +189,7 @@ LibGetTime (
     // The time zone variable does not exist in non-volatile storage, so create it.
     Time->TimeZone = EFI_UNSPECIFIED_TIMEZONE;
     // Store it
-    Status = mRT->SetVariable (
+    Status = EfiSetVariable (
                     (CHAR16 *)mTimeZoneVariableName,
                     &gEfiCallerIdGuid,
                     EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
@@ -345,7 +223,7 @@ LibGetTime (
 
   // Get the current daylight information from non-volatile storage
   Size = sizeof (Daylight);
-  Status = mRT->GetVariable (
+  Status = EfiGetVariable (
                   (CHAR16 *)mDaylightVariableName,
                   &gEfiCallerIdGuid,
                   NULL,
@@ -363,7 +241,7 @@ LibGetTime (
     // The daylight variable does not exist in non-volatile storage, so create it.
     Time->Daylight = 0;
     // Store it
-    Status = mRT->SetVariable (
+    Status = EfiSetVariable (
                     (CHAR16 *)mDaylightVariableName,
                     &gEfiCallerIdGuid,
                     EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
@@ -432,7 +310,7 @@ LibSetTime (
        (Time->Year   > 9999) ||
        (Time->Month  < 1   ) ||
        (Time->Month  > 12  ) ||
-       (!DayValid (Time)    ) ||
+       (!IsDayValid (Time) ) ||
        (Time->Hour   > 23  ) ||
        (Time->Minute > 59  ) ||
        (Time->Second > 59  ) ||
@@ -497,7 +375,7 @@ LibSetTime (
   // Do this after having set the RTC.
 
   // Save the current time zone information into non-volatile storage
-  Status = mRT->SetVariable (
+  Status = EfiSetVariable (
                   (CHAR16 *)mTimeZoneVariableName,
                   &gEfiCallerIdGuid,
                   EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
@@ -515,7 +393,7 @@ LibSetTime (
   }
 
   // Save the current daylight information into non-volatile storage
-  Status = mRT->SetVariable (
+  Status = EfiSetVariable (
                   (CHAR16 *)mDaylightVariableName,
                   &gEfiCallerIdGuid,
                   EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
@@ -608,7 +486,6 @@ LibRtcVirtualNotifyEvent (
   // runtime calls will be made in virtual mode.
   //
   EfiConvertPointer (0x0, (VOID**)&mPL031RtcBase);
-  EfiConvertPointer (0x0, (VOID**)&mRT);
   return;
 }
 
@@ -649,14 +526,6 @@ LibRtcInitialize (
   if (EFI_ERROR (Status)) {
     return Status;
   }
-
-  // Setup the setters and getters
-  gRT->GetTime       = LibGetTime;
-  gRT->SetTime       = LibSetTime;
-  gRT->GetWakeupTime = LibGetWakeupTime;
-  gRT->SetWakeupTime = LibSetWakeupTime;
-
-  mRT = gRT;
 
   // Install the protocol
   Handle = NULL;

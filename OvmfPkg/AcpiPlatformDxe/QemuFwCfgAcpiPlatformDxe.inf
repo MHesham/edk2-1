@@ -30,6 +30,8 @@
   QemuFwCfgAcpiPlatform.c
   QemuFwCfgAcpi.c
   EntryPoint.c
+  PciDecoding.c
+  BootScript.c
 
 [Packages]
   MdePkg/MdePkg.dec
@@ -42,12 +44,16 @@
   MemoryAllocationLib
   OrderedCollectionLib
   QemuFwCfgLib
+  QemuFwCfgS3Lib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
 
 [Protocols]
   gEfiAcpiTableProtocolGuid                     # PROTOCOL ALWAYS_CONSUMED
-  gEfiPciEnumerationCompleteProtocolGuid        # PROTOCOL SOMETIMES_CONSUMED
+  gEfiPciIoProtocolGuid                         # PROTOCOL SOMETIMES_CONSUMED
+
+[Guids]
+  gRootBridgesConnectedEventGroupGuid
 
 [Pcd]
   gEfiMdeModulePkgTokenSpaceGuid.PcdPciDisableBusEnumeration

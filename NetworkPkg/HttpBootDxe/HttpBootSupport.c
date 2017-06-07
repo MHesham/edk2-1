@@ -1,9 +1,10 @@
 /** @file
   Support functions implementation for UEFI HTTP boot driver.
 
-Copyright (c) 2015, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials are licensed and made available under 
-the terms and conditions of the BSD License that accompanies this distribution.  
+Copyright (c) 2015 - 2017, Intel Corporation. All rights reserved.<BR>
+(C) Copyright 2016 Hewlett Packard Enterprise Development LP<BR>
+This program and the accompanying materials are licensed and made available under
+the terms and conditions of the BSD License that accompanies this distribution.
 The full text of the license may be found at
 http://opensource.org/licenses/bsd-license.php.                                          
     
@@ -85,11 +86,10 @@ HttpBootUintnToAscDecWithFormat (
 {
   UINTN                          Remainder;
 
-  while (Length > 0) {
-    Length--;
+  for (; Length > 0; Length--) {
     Remainder      = Number % 10;
     Number        /= 10;
-    Buffer[Length] = (UINT8) ('0' + Remainder);
+    Buffer[Length - 1] = (UINT8) ('0' + Remainder);
   }
 }
 
@@ -371,7 +371,7 @@ HttpBootDns (
   //
   Status = NetLibCreateServiceChild (
              Private->Controller,
-             Private->Image,
+             Private->Ip6Nic->ImageHandle,
              &gEfiDns6ServiceBindingProtocolGuid,
              &Dns6Handle
              );
@@ -383,7 +383,7 @@ HttpBootDns (
                   Dns6Handle,
                   &gEfiDns6ProtocolGuid,
                   (VOID **) &Dns6,
-                  Private->Image,
+                  Private->Ip6Nic->ImageHandle,
                   Private->Controller,
                   EFI_OPEN_PROTOCOL_BY_DRIVER
                   );
@@ -473,7 +473,7 @@ Exit:
     gBS->CloseProtocol (
            Dns6Handle,
            &gEfiDns6ProtocolGuid,
-           Private->Image,
+           Private->Ip6Nic->ImageHandle,
            Private->Controller
            );
   }
@@ -481,7 +481,7 @@ Exit:
   if (Dns6Handle != NULL) {
     NetLibDestroyServiceChild (
       Private->Controller,
-      Private->Image,
+      Private->Ip6Nic->ImageHandle,
       &gEfiDns6ServiceBindingProtocolGuid,
       Dns6Handle
       );
@@ -548,44 +548,10 @@ HttpBootFreeHeader (
 }
 
 /**
-  Find a specified header field according to the field name.
-
-  @param[in]   HeaderCount      Number of HTTP header structures in Headers list. 
-  @param[in]   Headers          Array containing list of HTTP headers.
-  @param[in]   FieldName        Null terminated string which describes a field name. 
-
-  @return    Pointer to the found header or NULL.
-
-**/
-EFI_HTTP_HEADER *
-HttpBootFindHeader (
-  IN  UINTN                HeaderCount,
-  IN  EFI_HTTP_HEADER      *Headers,
-  IN  CHAR8                *FieldName
-  )
-{
-  UINTN                 Index;
-  
-  if (HeaderCount == 0 || Headers == NULL || FieldName == NULL) {
-    return NULL;
-  }
-
-  for (Index = 0; Index < HeaderCount; Index++){
-    //
-    // Field names are case-insensitive (RFC 2616).
-    //
-    if (AsciiStriCmp (Headers[Index].FieldName, FieldName) == 0) {
-      return &Headers[Index];
-    }
-  }
-  return NULL;
-}
-
-/**
   Set or update a HTTP header with the field name and corresponding value.
 
   @param[in]  HttpIoHeader       Point to the HTTP header holder.
-  @param[in]  FieldName          Null terminated string which describes a field name. 
+  @param[in]  FieldName          Null terminated string which describes a field name.
   @param[in]  FieldValue         Null terminated string which describes the corresponding field value.
 
   @retval  EFI_SUCCESS           The HTTP header has been set or updated.
@@ -609,7 +575,7 @@ HttpBootSetHeader (
     return EFI_INVALID_PARAMETER;
   }
 
-  Header = HttpBootFindHeader (HttpIoHeader->HeaderCount, HttpIoHeader->Headers, FieldName);
+  Header = HttpFindHeader (HttpIoHeader->HeaderCount, HttpIoHeader->Headers, FieldName);
   if (Header == NULL) {
     //
     // Add a new header.
@@ -656,6 +622,41 @@ HttpBootSetHeader (
   }
 
   return EFI_SUCCESS;
+}
+
+/**
+  Notify the callback function when an event is triggered.
+
+  @param[in]  Context         The opaque parameter to the function.
+
+**/
+VOID
+EFIAPI
+HttpIoNotifyDpc (
+  IN VOID                *Context
+  )
+{
+  *((BOOLEAN *) Context) = TRUE;
+}
+
+/**
+  Request HttpIoNotifyDpc as a DPC at TPL_CALLBACK.
+
+  @param[in]  Event                 The event signaled.
+  @param[in]  Context               The opaque parameter to the function.
+
+**/
+VOID
+EFIAPI
+HttpIoNotify (
+  IN EFI_EVENT              Event,
+  IN VOID                   *Context
+  )
+{
+  //
+  // Request HttpIoNotifyDpc as a DPC at TPL_CALLBACK
+  //
+  QueueDpc (TPL_CALLBACK, HttpIoNotifyDpc, Context);
 }
 
 /**
@@ -764,7 +765,7 @@ HttpIoCreateIo (
   Status = gBS->CreateEvent (
                   EVT_NOTIFY_SIGNAL,
                   TPL_NOTIFY,
-                  HttpBootCommonNotify,
+                  HttpIoNotify,
                   &HttpIo->IsTxDone,
                   &Event
                   );
@@ -777,7 +778,7 @@ HttpIoCreateIo (
   Status = gBS->CreateEvent (
                   EVT_NOTIFY_SIGNAL,
                   TPL_NOTIFY,
-                  HttpBootCommonNotify,
+                  HttpIoNotify,
                   &HttpIo->IsRxDone,
                   &Event
                   );
@@ -786,6 +787,21 @@ HttpIoCreateIo (
   }
   HttpIo->RspToken.Event = Event;
   HttpIo->RspToken.Message = &HttpIo->RspMessage;
+
+  //
+  // Create TimeoutEvent for response
+  //
+  Status = gBS->CreateEvent (
+                  EVT_TIMER,
+                  TPL_CALLBACK,
+                  NULL,
+                  NULL,
+                  &Event
+                  );
+  if (EFI_ERROR (Status)) {
+    goto ON_ERROR;
+  }
+  HttpIo->TimeoutEvent = Event;
 
   return EFI_SUCCESS;
   
@@ -819,6 +835,11 @@ HttpIoDestroyIo (
   }
 
   Event = HttpIo->RspToken.Event;
+  if (Event != NULL) {
+    gBS->CloseEvent (Event);
+  }
+
+  Event = HttpIo->TimeoutEvent;
   if (Event != NULL) {
     gBS->CloseEvent (Event);
   }
@@ -914,7 +935,7 @@ HttpIoSendRequest (
                                 FALSE to continue receive the previous response message.
   @param[out]  ResponseData     Point to a wrapper of the received response data.
   
-  @retval EFI_SUCCESS            The HTTP resopnse is received.
+  @retval EFI_SUCCESS            The HTTP response is received.
   @retval EFI_INVALID_PARAMETER  One or more parameters are invalid.
   @retval EFI_OUT_OF_RESOURCES   Failed to allocate memory.
   @retval EFI_DEVICE_ERROR       An unexpected network or system error occurred.
@@ -925,15 +946,22 @@ EFI_STATUS
 HttpIoRecvResponse (
   IN      HTTP_IO                  *HttpIo,
   IN      BOOLEAN                  RecvMsgHeader,
-     OUT  HTTP_IO_RESOPNSE_DATA    *ResponseData
+     OUT  HTTP_IO_RESPONSE_DATA    *ResponseData
   )
 {
   EFI_STATUS                 Status;
   EFI_HTTP_PROTOCOL          *Http;
-  EFI_HTTP_STATUS_CODE       StatusCode;
 
   if (HttpIo == NULL || HttpIo->Http == NULL || ResponseData == NULL) {
     return EFI_INVALID_PARAMETER;
+  }
+
+  //
+  // Start the timer, and wait Timeout seconds to receive the header packet.
+  //
+  Status = gBS->SetTimer (HttpIo->TimeoutEvent, TimerRelative, HTTP_BOOT_RESPONSE_TIMEOUT * TICKS_PER_MS);
+  if (EFI_ERROR (Status)) {
+    return Status;
   }
 
   //
@@ -958,30 +986,303 @@ HttpIoRecvResponse (
                    );
   
   if (EFI_ERROR (Status)) {
+    gBS->SetTimer (HttpIo->TimeoutEvent, TimerCancel, 0);
     return Status;
   }
 
   //
   // Poll the network until receive finish.
   //
-  while (!HttpIo->IsRxDone) {
+  while (!HttpIo->IsRxDone && ((HttpIo->TimeoutEvent == NULL) || EFI_ERROR (gBS->CheckEvent (HttpIo->TimeoutEvent)))) {
     Http->Poll (Http);
+  }
+
+  gBS->SetTimer (HttpIo->TimeoutEvent, TimerCancel, 0);
+
+  if (!HttpIo->IsRxDone) {
+    //
+    // Timeout occurs, cancel the response token.
+    //
+    Http->Cancel (Http, &HttpIo->RspToken);
+   
+    Status = EFI_TIMEOUT;
+    
+    return Status;
+  } else {
+    HttpIo->IsRxDone = FALSE;
   }
 
   //
   // Store the received data into the wrapper.
   //
-  Status = HttpIo->RspToken.Status;
-  if (!EFI_ERROR (Status)) {
-    ResponseData->HeaderCount = HttpIo->RspToken.Message->HeaderCount;
-    ResponseData->Headers     = HttpIo->RspToken.Message->Headers;
-    ResponseData->BodyLength  = HttpIo->RspToken.Message->BodyLength;
+  ResponseData->Status = HttpIo->RspToken.Status;
+  ResponseData->HeaderCount = HttpIo->RspToken.Message->HeaderCount;
+  ResponseData->Headers     = HttpIo->RspToken.Message->Headers;
+  ResponseData->BodyLength  = HttpIo->RspToken.Message->BodyLength;
+
+  return Status;
+}
+
+/**
+  This function checks the HTTP(S) URI scheme.
+
+  @param[in]    Uri              The pointer to the URI string.
+  
+  @retval EFI_SUCCESS            The URI scheme is valid.
+  @retval EFI_INVALID_PARAMETER  The URI scheme is not HTTP or HTTPS.
+  @retval EFI_ACCESS_DENIED      HTTP is disabled and the URI is HTTP.
+
+**/
+EFI_STATUS
+HttpBootCheckUriScheme (
+  IN      CHAR8                  *Uri
+  )
+{
+  UINTN                Index;
+  EFI_STATUS           Status;
+
+  Status = EFI_SUCCESS;
+
+  //
+  // Convert the scheme to all lower case.
+  //
+  for (Index = 0; Index < AsciiStrLen (Uri); Index++) {
+    if (Uri[Index] == ':') {
+      break;
+    }
+    if (Uri[Index] >= 'A' && Uri[Index] <= 'Z') {
+      Uri[Index] -= (CHAR8)('A' - 'a');
+    }
+  }
+
+  //
+  // Return EFI_INVALID_PARAMETER if the URI is not HTTP or HTTPS.
+  //
+  if ((AsciiStrnCmp (Uri, "http://", 7) != 0) && (AsciiStrnCmp (Uri, "https://", 8) != 0)) {
+    DEBUG ((EFI_D_ERROR, "HttpBootCheckUriScheme: Invalid Uri.\n"));
+    return EFI_INVALID_PARAMETER;
   }
   
-  if (RecvMsgHeader) {
-    StatusCode = HttpIo->RspToken.Message->Data.Response->StatusCode;
-    HttpBootPrintErrorMessage (StatusCode);
+  //
+  // HTTP is disabled, return EFI_ACCESS_DENIED if the URI is HTTP.
+  //
+  if (!PcdGetBool (PcdAllowHttpConnections) && (AsciiStrnCmp (Uri, "http://", 7) == 0)) {
+    DEBUG ((EFI_D_ERROR, "HttpBootCheckUriScheme: HTTP is disabled.\n"));
+    return EFI_ACCESS_DENIED;
   }
 
   return Status;
 }
+
+/**
+  Get the URI address string from the input device path.
+
+  Caller need to free the buffer in the UriAddress pointer.
+  
+  @param[in]   FilePath         Pointer to the device path which contains a URI device path node.
+  @param[out]  UriAddress       The URI address string extract from the device path.
+  
+  @retval EFI_SUCCESS            The URI string is returned.
+  @retval EFI_OUT_OF_RESOURCES   Failed to allocate memory.
+
+**/
+EFI_STATUS
+HttpBootParseFilePath (
+  IN     EFI_DEVICE_PATH_PROTOCOL     *FilePath,
+     OUT CHAR8                        **UriAddress
+  )
+{
+  EFI_DEVICE_PATH_PROTOCOL  *TempDevicePath;
+  URI_DEVICE_PATH           *UriDevicePath;
+  CHAR8                     *Uri;
+  UINTN                     UriStrLength;
+
+  if (FilePath == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *UriAddress = NULL;
+
+  //
+  // Extract the URI address from the FilePath
+  //
+  TempDevicePath = FilePath;
+  while (!IsDevicePathEnd (TempDevicePath)) {
+    if ((DevicePathType (TempDevicePath) == MESSAGING_DEVICE_PATH) &&
+        (DevicePathSubType (TempDevicePath) == MSG_URI_DP)) {
+      UriDevicePath = (URI_DEVICE_PATH*) TempDevicePath;
+      //
+      // UEFI Spec doesn't require the URI to be a NULL-terminated string
+      // So we allocate a new buffer and always append a '\0' to it.
+      //
+      UriStrLength = DevicePathNodeLength (UriDevicePath) - sizeof(EFI_DEVICE_PATH_PROTOCOL);
+      if (UriStrLength == 0) {
+        //
+        // return a NULL UriAddress if it's a empty URI device path node.
+        //
+        break;
+      }
+      Uri = AllocatePool (UriStrLength + 1);
+      if (Uri == NULL) {
+        return EFI_OUT_OF_RESOURCES;
+      }
+      CopyMem (Uri, UriDevicePath->Uri, DevicePathNodeLength (UriDevicePath) - sizeof(EFI_DEVICE_PATH_PROTOCOL));
+      Uri[DevicePathNodeLength (UriDevicePath) - sizeof(EFI_DEVICE_PATH_PROTOCOL)] = '\0';
+
+      *UriAddress = Uri;
+    }
+    TempDevicePath = NextDevicePathNode (TempDevicePath);
+  }
+
+  return EFI_SUCCESS;
+}
+
+/**
+  This function returns the image type according to server replied HTTP message
+  and also the image's URI info.
+
+  @param[in]    Uri              The pointer to the image's URI string.
+  @param[in]    UriParser        URI Parse result returned by NetHttpParseUrl(). 
+  @param[in]    HeaderCount      Number of HTTP header structures in Headers list. 
+  @param[in]    Headers          Array containing list of HTTP headers.
+  @param[out]   ImageType        The image type of the downloaded file.
+  
+  @retval EFI_SUCCESS            The image type is returned in ImageType.
+  @retval EFI_INVALID_PARAMETER  ImageType, Uri or UriParser is NULL.
+  @retval EFI_INVALID_PARAMETER  HeaderCount is not zero, and Headers is NULL.
+  @retval EFI_NOT_FOUND          Failed to identify the image type.
+  @retval Others                 Unexpect error happened.
+
+**/
+EFI_STATUS
+HttpBootCheckImageType (
+  IN      CHAR8                  *Uri,
+  IN      VOID                   *UriParser,
+  IN      UINTN                  HeaderCount,
+  IN      EFI_HTTP_HEADER        *Headers,
+     OUT  HTTP_BOOT_IMAGE_TYPE   *ImageType
+  )
+{
+  EFI_STATUS            Status;
+  EFI_HTTP_HEADER       *Header;
+  CHAR8                 *FilePath;
+  CHAR8                 *FilePost;
+
+  if (Uri == NULL || UriParser == NULL || ImageType == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if (HeaderCount != 0 && Headers == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  //
+  // Determine the image type by the HTTP Content-Type header field first.
+  //   "application/efi"         -> EFI Image
+  //   "application/vnd.efi-iso" -> CD/DVD Image
+  //   "application/vnd.efi-img" -> Virtual Disk Image
+  //
+  Header = HttpFindHeader (HeaderCount, Headers, HTTP_HEADER_CONTENT_TYPE);
+  if (Header != NULL) {
+    if (AsciiStriCmp (Header->FieldValue, HTTP_CONTENT_TYPE_APP_EFI) == 0) {
+      *ImageType = ImageTypeEfi;
+      return EFI_SUCCESS;
+    } else if (AsciiStriCmp (Header->FieldValue, HTTP_CONTENT_TYPE_APP_ISO) == 0) {
+      *ImageType = ImageTypeVirtualCd;
+      return EFI_SUCCESS;
+    } else if (AsciiStriCmp (Header->FieldValue, HTTP_CONTENT_TYPE_APP_IMG) == 0) {
+      *ImageType = ImageTypeVirtualDisk;
+      return EFI_SUCCESS;
+    }
+  }
+
+  //
+  // Determine the image type by file extension:
+  //   *.efi -> EFI Image
+  //   *.iso -> CD/DVD Image
+  //   *.img -> Virtual Disk Image
+  //
+  Status = HttpUrlGetPath (
+             Uri,
+             UriParser,
+             &FilePath
+             );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  FilePost = FilePath + AsciiStrLen (FilePath) - 4;
+  if (AsciiStrCmp (FilePost, ".efi") == 0) {
+    *ImageType = ImageTypeEfi;
+  } else if (AsciiStrCmp (FilePost, ".iso") == 0) {
+    *ImageType = ImageTypeVirtualCd;
+  } else if (AsciiStrCmp (FilePost, ".img") == 0) {
+    *ImageType = ImageTypeVirtualDisk;
+  } else {
+    *ImageType = ImageTypeMax;
+  }
+
+  FreePool (FilePath);
+
+  return (*ImageType < ImageTypeMax) ? EFI_SUCCESS : EFI_NOT_FOUND;
+}
+
+/**
+  This function register the RAM disk info to the system.
+  
+  @param[in]       Private         The pointer to the driver's private data.
+  @param[in]       BufferSize      The size of Buffer in bytes.
+  @param[in]       Buffer          The base address of the RAM disk.
+  @param[in]       ImageType       The image type of the file in Buffer.
+
+  @retval EFI_SUCCESS              The RAM disk has been registered.
+  @retval EFI_NOT_FOUND            No RAM disk protocol instances were found.
+  @retval EFI_UNSUPPORTED          The ImageType is not supported.
+  @retval Others                   Unexpected error happened.
+
+**/
+EFI_STATUS
+HttpBootRegisterRamDisk (
+  IN  HTTP_BOOT_PRIVATE_DATA       *Private,
+  IN  UINTN                        BufferSize,
+  IN  VOID                         *Buffer,
+  IN  HTTP_BOOT_IMAGE_TYPE         ImageType
+  )
+{
+  EFI_RAM_DISK_PROTOCOL      *RamDisk;
+  EFI_STATUS                 Status;
+  EFI_DEVICE_PATH_PROTOCOL   *DevicePath;
+  EFI_GUID                   *RamDiskType;
+  
+  ASSERT (Private != NULL);
+  ASSERT (Buffer != NULL);
+  ASSERT (BufferSize != 0);
+
+  Status = gBS->LocateProtocol (&gEfiRamDiskProtocolGuid, NULL, (VOID**) &RamDisk);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "HTTP Boot: Couldn't find the RAM Disk protocol - %r\n", Status));
+    return Status;
+  }
+
+  if (ImageType == ImageTypeVirtualCd) {
+    RamDiskType = &gEfiVirtualCdGuid;
+  } else if (ImageType == ImageTypeVirtualDisk) {
+    RamDiskType = &gEfiVirtualDiskGuid;
+  } else {
+    return EFI_UNSUPPORTED;
+  }
+  
+  Status = RamDisk->Register (
+             (UINTN)Buffer,
+             (UINT64)BufferSize,
+             RamDiskType,
+             Private->UsingIpv6 ? Private->Ip6Nic->DevicePath : Private->Ip4Nic->DevicePath,
+             &DevicePath
+             );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "HTTP Boot: Failed to register RAM Disk - %r\n", Status));
+  }
+
+  return Status;
+}
+

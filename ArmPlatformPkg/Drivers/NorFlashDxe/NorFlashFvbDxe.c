@@ -111,7 +111,7 @@ InitializeFvAndVariableStoreHeaders (
   // VARIABLE_STORE_HEADER
   //
   VariableStoreHeader = (VARIABLE_STORE_HEADER*)((UINTN)Headers + FirmwareVolumeHeader->HeaderLength);
-  CopyGuid (&VariableStoreHeader->Signature, mNorFlashVariableGuid);
+  CopyGuid (&VariableStoreHeader->Signature, &gEfiAuthenticatedVariableGuid);
   VariableStoreHeader->Size = PcdGet32(PcdFlashNvStorageVariableSize) - FirmwareVolumeHeader->HeaderLength;
   VariableStoreHeader->Format            = VARIABLE_STORE_FORMATTED;
   VariableStoreHeader->State             = VARIABLE_STORE_HEALTHY;
@@ -181,7 +181,8 @@ ValidateFvHeader (
   VariableStoreHeader = (VARIABLE_STORE_HEADER*)((UINTN)FwVolHeader + FwVolHeader->HeaderLength);
 
   // Check the Variable Store Guid
-  if (!CompareGuid (&VariableStoreHeader->Signature, mNorFlashVariableGuid)) {
+  if (!CompareGuid (&VariableStoreHeader->Signature, &gEfiVariableGuid) &&
+      !CompareGuid (&VariableStoreHeader->Signature, &gEfiAuthenticatedVariableGuid)) {
     DEBUG ((EFI_D_INFO, "%a: Variable Store Guid non-compatible\n",
       __FUNCTION__));
     return EFI_NOT_FOUND;
@@ -627,10 +628,16 @@ FvbEraseBlocks (
     }
 
     // How many Lba blocks are we requested to erase?
-    NumOfLba = VA_ARG (Args, UINT32);
+    NumOfLba = VA_ARG (Args, UINTN);
 
     // All blocks must be within range
-    DEBUG ((DEBUG_BLKIO, "FvbEraseBlocks: Check if: ( StartingLba=%ld + NumOfLba=%d - 1 ) > LastBlock=%ld.\n", Instance->StartLba + StartingLba, NumOfLba, Instance->Media.LastBlock));
+    DEBUG ((
+      DEBUG_BLKIO,
+      "FvbEraseBlocks: Check if: ( StartingLba=%ld + NumOfLba=%Lu - 1 ) > LastBlock=%ld.\n",
+      Instance->StartLba + StartingLba,
+      (UINT64)NumOfLba,
+      Instance->Media.LastBlock
+      ));
     if ((NumOfLba == 0) || ((Instance->StartLba + StartingLba + NumOfLba - 1) > Instance->Media.LastBlock)) {
       VA_END (Args);
       DEBUG ((EFI_D_ERROR, "FvbEraseBlocks: ERROR - Lba range goes past the last Lba.\n"));
@@ -655,7 +662,7 @@ FvbEraseBlocks (
     }
 
     // How many Lba blocks are we requested to erase?
-    NumOfLba = VA_ARG (Args, UINT32);
+    NumOfLba = VA_ARG (Args, UINTN);
 
     // Go through each one and erase it
     while (NumOfLba > 0) {
@@ -718,6 +725,29 @@ NorFlashFvbInitialize (
   UINTN       RuntimeMmioRegionSize;
 
   DEBUG((DEBUG_BLKIO,"NorFlashFvbInitialize\n"));
+  ASSERT((Instance != NULL));
+
+  //
+  // Declare the Non-Volatile storage as EFI_MEMORY_RUNTIME
+  //
+
+  // Note: all the NOR Flash region needs to be reserved into the UEFI Runtime memory;
+  //       even if we only use the small block region at the top of the NOR Flash.
+  //       The reason is when the NOR Flash memory is set into program mode, the command
+  //       is written as the base of the flash region (ie: Instance->DeviceBaseAddress)
+  RuntimeMmioRegionSize = (Instance->RegionBaseAddress - Instance->DeviceBaseAddress) + Instance->Size;
+
+  Status = gDS->AddMemorySpace (
+      EfiGcdMemoryTypeMemoryMappedIo,
+      Instance->DeviceBaseAddress, RuntimeMmioRegionSize,
+      EFI_MEMORY_UC | EFI_MEMORY_RUNTIME
+      );
+  ASSERT_EFI_ERROR (Status);
+
+  Status = gDS->SetMemorySpaceAttributes (
+      Instance->DeviceBaseAddress, RuntimeMmioRegionSize,
+      EFI_MEMORY_UC | EFI_MEMORY_RUNTIME);
+  ASSERT_EFI_ERROR (Status);
 
   Instance->Initialized = TRUE;
   mFlashNvStorageVariableBase = FixedPcdGet32 (PcdFlashNvStorageVariableBase);
@@ -754,28 +784,6 @@ NorFlashFvbInitialize (
       return Status;
     }
   }
-
-  //
-  // Declare the Non-Volatile storage as EFI_MEMORY_RUNTIME
-  //
-
-  // Note: all the NOR Flash region needs to be reserved into the UEFI Runtime memory;
-  //       even if we only use the small block region at the top of the NOR Flash.
-  //       The reason is when the NOR Flash memory is set into program mode, the command
-  //       is written as the base of the flash region (ie: Instance->DeviceBaseAddress)
-  RuntimeMmioRegionSize = (Instance->RegionBaseAddress - Instance->DeviceBaseAddress) + Instance->Size;
-
-  Status = gDS->AddMemorySpace (
-      EfiGcdMemoryTypeMemoryMappedIo,
-      Instance->DeviceBaseAddress, RuntimeMmioRegionSize,
-      EFI_MEMORY_UC | EFI_MEMORY_RUNTIME
-      );
-  ASSERT_EFI_ERROR (Status);
-
-  Status = gDS->SetMemorySpaceAttributes (
-      Instance->DeviceBaseAddress, RuntimeMmioRegionSize,
-      EFI_MEMORY_UC | EFI_MEMORY_RUNTIME);
-  ASSERT_EFI_ERROR (Status);
 
   //
   // Register for the virtual address change event

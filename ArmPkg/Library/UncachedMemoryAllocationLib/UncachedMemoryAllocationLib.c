@@ -27,6 +27,10 @@
 #include <Library/DxeServicesTableLib.h>
 #include <Library/CacheMaintenanceLib.h>
 
+#include <Protocol/Cpu.h>
+
+STATIC EFI_CPU_ARCH_PROTOCOL    *mCpu;
+
 VOID *
 UncachedInternalAllocatePages (
   IN EFI_MEMORY_TYPE  MemoryType,
@@ -42,11 +46,6 @@ UncachedInternalAllocateAlignedPages (
 
 
 
-//
-// Assume all of memory has the same cache attributes, unless we do our magic
-//
-UINT64  gAttributes;
-
 typedef struct {
   EFI_PHYSICAL_ADDRESS  Base;
   VOID                  *Allocation;
@@ -54,6 +53,7 @@ typedef struct {
   EFI_MEMORY_TYPE       MemoryType;
   BOOLEAN               Allocated;
   LIST_ENTRY            Link;
+  UINT64                Attributes;
 } FREE_PAGE_NODE;
 
 STATIC LIST_ENTRY  mPageList = INITIALIZE_LIST_HEAD_VARIABLE (mPageList);
@@ -153,18 +153,26 @@ AllocatePagesFromList (
   }
 
   Status = gDS->GetMemorySpaceDescriptor (Memory, &Descriptor);
-  if (!EFI_ERROR (Status)) {
-    // We are making an assumption that all of memory has the same default attributes
-    gAttributes = Descriptor.Attributes;
-  } else {
-    gBS->FreePages (Memory, Pages);
-    return Status;
+  if (EFI_ERROR (Status)) {
+    goto FreePages;
   }
 
-  Status = gDS->SetMemorySpaceAttributes (Memory, EFI_PAGES_TO_SIZE (Pages), EFI_MEMORY_WC);
+  Status = gDS->SetMemorySpaceAttributes (Memory, EFI_PAGES_TO_SIZE (Pages),
+                  EFI_MEMORY_WC);
   if (EFI_ERROR (Status)) {
-    gBS->FreePages (Memory, Pages);
-    return Status;
+    goto FreePages;
+  }
+
+  //
+  // EFI_CPU_ARCH_PROTOCOL::SetMemoryAttributes() will preserve the original
+  // memory type attribute if no memory type is passed. Permission attributes
+  // will be replaced, so EFI_MEMORY_RO will be removed if present (although
+  // it would be a bug if that were the case for an AllocatePages() allocation)
+  //
+  Status = mCpu->SetMemoryAttributes (mCpu, Memory, EFI_PAGES_TO_SIZE (Pages),
+                   EFI_MEMORY_XP);
+  if (EFI_ERROR (Status)) {
+    goto FreePages;
   }
 
   InvalidateDataCacheRange ((VOID *)(UINTN)Memory, EFI_PAGES_TO_SIZE (Pages));
@@ -172,8 +180,8 @@ AllocatePagesFromList (
   NewNode = AllocatePool (sizeof (FREE_PAGE_NODE));
   if (NewNode == NULL) {
     ASSERT (FALSE);
-    gBS->FreePages (Memory, Pages);
-    return EFI_OUT_OF_RESOURCES;
+    Status = EFI_OUT_OF_RESOURCES;
+    goto FreePages;
   }
 
   NewNode->Base       = Memory;
@@ -181,11 +189,16 @@ AllocatePagesFromList (
   NewNode->Pages      = Pages;
   NewNode->Allocated  = TRUE;
   NewNode->MemoryType = MemoryType;
+  NewNode->Attributes = Descriptor.Attributes;
 
   InsertTailList (&mPageList, &NewNode->Link);
 
   *Allocation = NewNode->Allocation;
   return EFI_SUCCESS;
+
+FreePages:
+  gBS->FreePages (Memory, Pages);
+  return Status;
 }
 
 /**
@@ -243,6 +256,16 @@ FreePagesFromList (
  */
 EFI_STATUS
 EFIAPI
+UncachedMemoryAllocationLibConstructor (
+  IN EFI_HANDLE        ImageHandle,
+  IN EFI_SYSTEM_TABLE  *SystemTable
+  )
+{
+  return gBS->LocateProtocol (&gEfiCpuArchProtocolGuid, NULL, (VOID **)&mCpu);
+}
+
+EFI_STATUS
+EFIAPI
 UncachedMemoryAllocationLibDestructor (
   IN EFI_HANDLE        ImageHandle,
   IN EFI_SYSTEM_TABLE  *SystemTable
@@ -266,6 +289,10 @@ UncachedMemoryAllocationLibDestructor (
     // We only free the non-allocated buffer
     if (OldNode->Allocated == FALSE) {
       gBS->FreePages ((EFI_PHYSICAL_ADDRESS)(UINTN)OldNode->Base, OldNode->Pages);
+
+      gDS->SetMemorySpaceAttributes ((EFI_PHYSICAL_ADDRESS)(UINTN)OldNode->Base,
+             EFI_PAGES_TO_SIZE (OldNode->Pages), OldNode->Attributes);
+
       RemoveEntryList (&OldNode->Link);
       FreePool (OldNode);
     }
@@ -547,7 +574,7 @@ UncachedInternalAllocatePool (
   IN UINTN            AllocationSize
   )
 {
-  UINTN CacheLineLength = ArmDataCacheLineLength ();
+  UINTN CacheLineLength = ArmCacheWritebackGranule ();
   return UncachedInternalAllocateAlignedPool (MemoryType, AllocationSize, CacheLineLength);
 }
 

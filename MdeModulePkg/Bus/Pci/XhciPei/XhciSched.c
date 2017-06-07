@@ -2,7 +2,7 @@
 PEIM to produce gPeiUsb2HostControllerPpiGuid based on gPeiUsbControllerPpiGuid
 which is used to enable recovery function from USB Drivers.
 
-Copyright (c) 2014 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2014 - 2017, Intel Corporation. All rights reserved.<BR>
 
 This program and the accompanying materials
 are licensed and made available under the terms and conditions
@@ -683,7 +683,7 @@ XhcPeiCheckUrbResult (
       case TRB_COMPLETION_SHORT_PACKET:
       case TRB_COMPLETION_SUCCESS:
         if (EvtTrb->Completecode == TRB_COMPLETION_SHORT_PACKET) {
-          DEBUG ((EFI_D_ERROR, "XhcPeiCheckUrbResult: short packet happens!\n"));
+          DEBUG ((EFI_D_VERBOSE, "XhcPeiCheckUrbResult: short packet happens!\n"));
         }
 
         TRBType = (UINT8) (TRBPtr->Type);
@@ -1195,6 +1195,10 @@ XhcPeiInitializeDeviceSlot (
   // 8) Issue an Address Device Command for the Device Slot, where the command points to the Input
   //    Context data structure described above.
   //
+  // Delay 10ms to meet TRSTRCY delay requirement in usb 2.0 spec chapter 7.1.7.5 before sending SetAddress() request
+  // to device.
+  //
+  MicroSecondDelay (XHC_RESET_RECOVERY_DELAY);
   ZeroMem (&CmdTrbAddr, sizeof (CmdTrbAddr));
   PhyAddr = UsbHcGetPciAddrForHostAddr (Xhc->MemPool, Xhc->UsbDevContext[SlotId].InputContext, sizeof (INPUT_CONTEXT));
   CmdTrbAddr.PtrLo    = XHC_LOW_32BIT (PhyAddr);
@@ -1402,6 +1406,10 @@ XhcPeiInitializeDeviceSlot64 (
   // 8) Issue an Address Device Command for the Device Slot, where the command points to the Input
   //    Context data structure described above.
   //
+  // Delay 10ms to meet TRSTRCY delay requirement in usb 2.0 spec chapter 7.1.7.5 before sending SetAddress() request
+  // to device.
+  //
+  MicroSecondDelay (XHC_RESET_RECOVERY_DELAY);
   ZeroMem (&CmdTrbAddr, sizeof (CmdTrbAddr));
   PhyAddr = UsbHcGetPciAddrForHostAddr (Xhc->MemPool, Xhc->UsbDevContext[SlotId].InputContext, sizeof (INPUT_CONTEXT_64));
   CmdTrbAddr.PtrLo    = XHC_LOW_32BIT (PhyAddr);
@@ -1742,6 +1750,20 @@ XhcPeiSetConfigCmd (
             InputContext->EP[Dci-1].EPType = ED_ISOCH_OUT;
           }
           //
+          // Get the bInterval from descriptor and init the the interval field of endpoint context.
+          // Refer to XHCI 1.1 spec section 6.2.3.6.
+          //
+          if (DeviceSpeed == EFI_USB_SPEED_FULL) {
+            Interval = EpDesc->Interval;
+            ASSERT (Interval >= 1 && Interval <= 16);
+            InputContext->EP[Dci-1].Interval = Interval + 2;
+          } else if ((DeviceSpeed == EFI_USB_SPEED_HIGH) || (DeviceSpeed == EFI_USB_SPEED_SUPER)) {
+            Interval = EpDesc->Interval;
+            ASSERT (Interval >= 1 && Interval <= 16);
+            InputContext->EP[Dci-1].Interval = Interval - 1;
+          }
+
+          //
           // Do not support isochronous transfer now.
           //
           DEBUG ((EFI_D_INFO, "XhcPeiSetConfigCmd: Unsupport ISO EP found, Transfer ring is not allocated.\n"));
@@ -1944,6 +1966,20 @@ XhcPeiSetConfigCmd64 (
             InputContext->EP[Dci-1].CErr   = 0;
             InputContext->EP[Dci-1].EPType = ED_ISOCH_OUT;
           }
+          //
+          // Get the bInterval from descriptor and init the the interval field of endpoint context.
+          // Refer to XHCI 1.1 spec section 6.2.3.6.
+          //
+          if (DeviceSpeed == EFI_USB_SPEED_FULL) {
+            Interval = EpDesc->Interval;
+            ASSERT (Interval >= 1 && Interval <= 16);
+            InputContext->EP[Dci-1].Interval = Interval + 2;
+          } else if ((DeviceSpeed == EFI_USB_SPEED_HIGH) || (DeviceSpeed == EFI_USB_SPEED_SUPER)) {
+            Interval = EpDesc->Interval;
+            ASSERT (Interval >= 1 && Interval <= 16);
+            InputContext->EP[Dci-1].Interval = Interval - 1;
+          }
+
           //
           // Do not support isochronous transfer now.
           //

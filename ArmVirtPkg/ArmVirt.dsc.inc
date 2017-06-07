@@ -17,17 +17,19 @@
   DEFINE DEBUG_PRINT_ERROR_LEVEL = 0x8000004F
   DEFINE TTY_TERMINAL            = FALSE
 
+[BuildOptions.common.EDKII.DXE_CORE,BuildOptions.common.EDKII.DXE_DRIVER,BuildOptions.common.EDKII.UEFI_DRIVER,BuildOptions.common.EDKII.UEFI_APPLICATION]
+  GCC:*_*_*_DLINK_FLAGS = -z common-page-size=0x1000
+
 [BuildOptions.common.EDKII.DXE_RUNTIME_DRIVER]
   GCC:*_*_ARM_DLINK_FLAGS = -z common-page-size=0x1000
   GCC:*_*_AARCH64_DLINK_FLAGS = -z common-page-size=0x10000
+  RVCT:*_*_ARM_DLINK_FLAGS = --scatter $(EDK_TOOLS_PATH)/Scripts/Rvct-Align4K.sct
 
 [LibraryClasses.common]
 !if $(TARGET) == RELEASE
   DebugLib|MdePkg/Library/BaseDebugLibNull/BaseDebugLibNull.inf
-  UncachedMemoryAllocationLib|ArmPkg/Library/UncachedMemoryAllocationLib/UncachedMemoryAllocationLib.inf
 !else
   DebugLib|MdePkg/Library/BaseDebugLibSerialPort/BaseDebugLibSerialPort.inf
-  UncachedMemoryAllocationLib|ArmPkg/Library/DebugUncachedMemoryAllocationLib/DebugUncachedMemoryAllocationLib.inf
 !endif
   DebugPrintErrorLevelLib|MdePkg/Library/BaseDebugPrintErrorLevelLib/BaseDebugPrintErrorLevelLib.inf
 
@@ -47,22 +49,27 @@
   DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
   UefiBootServicesTableLib|MdePkg/Library/UefiBootServicesTableLib/UefiBootServicesTableLib.inf
   DxeServicesTableLib|MdePkg/Library/DxeServicesTableLib/DxeServicesTableLib.inf
+  DxeServicesLib|MdePkg/Library/DxeServicesLib/DxeServicesLib.inf
   UefiDriverEntryPoint|MdePkg/Library/UefiDriverEntryPoint/UefiDriverEntryPoint.inf
   UefiApplicationEntryPoint|MdePkg/Library/UefiApplicationEntryPoint/UefiApplicationEntryPoint.inf
   HiiLib|MdeModulePkg/Library/UefiHiiLib/UefiHiiLib.inf
   UefiHiiServicesLib|MdeModulePkg/Library/UefiHiiServicesLib/UefiHiiServicesLib.inf
+  SortLib|MdeModulePkg/Library/UefiSortLib/UefiSortLib.inf
 
   UefiRuntimeLib|MdePkg/Library/UefiRuntimeLib/UefiRuntimeLib.inf
   OrderedCollectionLib|MdePkg/Library/BaseOrderedCollectionRedBlackTreeLib/BaseOrderedCollectionRedBlackTreeLib.inf
 
   #
+  # Ramdisk Requirements
+  #
+  FileExplorerLib|MdeModulePkg/Library/FileExplorerLib/FileExplorerLib.inf
+
   # Allow dynamic PCDs
   #
   PcdLib|MdePkg/Library/DxePcdLib/DxePcdLib.inf
 
-  # 1/123 faster than Stm or Vstm version
-  #BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
-  BaseMemoryLib|ArmPkg/Library/BaseMemoryLibStm/BaseMemoryLibStm.inf
+  # use the accelerated BaseMemoryLibOptDxe by default, overrides for SEC/PEI below
+  BaseMemoryLib|MdePkg/Library/BaseMemoryLibOptDxe/BaseMemoryLibOptDxe.inf
 
   # Networking Requirements
   NetLib|MdeModulePkg/Library/DxeNetLib/DxeNetLib.inf
@@ -82,7 +89,7 @@
   # ARM Architectural Libraries
   CacheMaintenanceLib|ArmPkg/Library/ArmCacheMaintenanceLib/ArmCacheMaintenanceLib.inf
   DefaultExceptionHandlerLib|ArmPkg/Library/DefaultExceptionHandlerLib/DefaultExceptionHandlerLib.inf
-  CpuExceptionHandlerLib|MdeModulePkg/Library/CpuExceptionHandlerLibNull/CpuExceptionHandlerLibNull.inf
+  CpuExceptionHandlerLib|ArmPkg/Library/ArmExceptionLib/ArmExceptionLib.inf
   ArmDisassemblerLib|ArmPkg/Library/ArmDisassemblerLib/ArmDisassemblerLib.inf
   DmaLib|ArmPkg/Library/ArmDmaLib/ArmDmaLib.inf
   ArmGicLib|ArmPkg/Drivers/ArmGic/ArmGicLib.inf
@@ -98,6 +105,7 @@
 
   # ARM PL031 RTC Driver
   RealTimeClockLib|ArmPlatformPkg/Library/PL031RealTimeClockLib/PL031RealTimeClockLib.inf
+  TimeBaseLib|EmbeddedPkg/Library/TimeBaseLib/TimeBaseLib.inf
   # ARM PL011 UART Driver
   PL011UartLib|ArmPlatformPkg/Drivers/PL011Uart/PL011Uart.inf
   SerialPortLib|ArmVirtPkg/Library/FdtPL011SerialPortLib/FdtPL011SerialPortLib.inf
@@ -132,7 +140,7 @@
   #
 !if $(SECURE_BOOT_ENABLE) == TRUE
   IntrinsicLib|CryptoPkg/Library/IntrinsicLib/IntrinsicLib.inf
-  OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLib.inf
+  OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLibCrypto.inf
   TpmMeasurementLib|SecurityPkg/Library/DxeTpmMeasurementLib/DxeTpmMeasurementLib.inf
   AuthVariableLib|SecurityPkg/Library/AuthVariableLib/AuthVariableLib.inf
   BaseCryptLib|CryptoPkg/Library/BaseCryptLib/BaseCryptLib.inf
@@ -144,10 +152,11 @@
   AuthVariableLib|MdeModulePkg/Library/AuthVariableLibNull/AuthVariableLibNull.inf
 !endif
   VarCheckLib|MdeModulePkg/Library/VarCheckLib/VarCheckLib.inf
+  UefiBootManagerLib|MdeModulePkg/Library/UefiBootManagerLib/UefiBootManagerLib.inf
 
 [LibraryClasses.common.SEC]
   PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
-  ArmPlatformSecExtraActionLib|ArmPlatformPkg/Library/DebugSecExtraActionLib/DebugSecExtraActionLib.inf
+  BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
 
   DebugAgentLib|ArmPkg/Library/DebugAgentSymbolsBaseLib/DebugAgentSymbolsBaseLib.inf
   DefaultExceptionHandlerLib|ArmPkg/Library/DefaultExceptionHandlerLib/DefaultExceptionHandlerLibBase.inf
@@ -159,6 +168,7 @@
 
 [LibraryClasses.common.PEI_CORE]
   PcdLib|MdePkg/Library/PeiPcdLib/PeiPcdLib.inf
+  BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
   HobLib|MdePkg/Library/PeiHobLib/PeiHobLib.inf
   PeiServicesLib|MdePkg/Library/PeiServicesLib/PeiServicesLib.inf
   MemoryAllocationLib|MdePkg/Library/PeiMemoryAllocationLib/PeiMemoryAllocationLib.inf
@@ -175,6 +185,7 @@
 
 [LibraryClasses.common.PEIM]
   PcdLib|MdePkg/Library/PeiPcdLib/PeiPcdLib.inf
+  BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
   HobLib|MdePkg/Library/PeiHobLib/PeiHobLib.inf
   PeiServicesLib|MdePkg/Library/PeiServicesLib/PeiServicesLib.inf
   MemoryAllocationLib|MdePkg/Library/PeiMemoryAllocationLib/PeiMemoryAllocationLib.inf
@@ -197,12 +208,10 @@
   ReportStatusCodeLib|IntelFrameworkModulePkg/Library/DxeReportStatusCodeLibFramework/DxeReportStatusCodeLib.inf
   ExtractGuidedSectionLib|MdePkg/Library/DxeExtractGuidedSectionLib/DxeExtractGuidedSectionLib.inf
   UefiDecompressLib|MdePkg/Library/BaseUefiDecompressLib/BaseUefiDecompressLib.inf
-  DxeServicesLib|MdePkg/Library/DxeServicesLib/DxeServicesLib.inf
   PerformanceLib|MdeModulePkg/Library/DxeCorePerformanceLib/DxeCorePerformanceLib.inf
 
 [LibraryClasses.common.DXE_DRIVER]
   ReportStatusCodeLib|IntelFrameworkModulePkg/Library/DxeReportStatusCodeLibFramework/DxeReportStatusCodeLib.inf
-  DxeServicesLib|MdePkg/Library/DxeServicesLib/DxeServicesLib.inf
   SecurityManagementLib|MdeModulePkg/Library/DxeSecurityManagementLib/DxeSecurityManagementLib.inf
   PerformanceLib|MdeModulePkg/Library/DxePerformanceLib/DxePerformanceLib.inf
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
@@ -214,14 +223,13 @@
   HiiLib|MdeModulePkg/Library/UefiHiiLib/UefiHiiLib.inf
   ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
   FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
-  SortLib|MdeModulePkg/Library/UefiSortLib/UefiSortLib.inf
+  ReportStatusCodeLib|MdeModulePkg/Library/DxeReportStatusCodeLib/DxeReportStatusCodeLib.inf
 
 [LibraryClasses.common.UEFI_DRIVER]
   ReportStatusCodeLib|IntelFrameworkModulePkg/Library/DxeReportStatusCodeLibFramework/DxeReportStatusCodeLib.inf
   UefiDecompressLib|IntelFrameworkModulePkg/Library/BaseUefiTianoCustomDecompressLib/BaseUefiTianoCustomDecompressLib.inf
   ExtractGuidedSectionLib|MdePkg/Library/DxeExtractGuidedSectionLib/DxeExtractGuidedSectionLib.inf
   PerformanceLib|MdeModulePkg/Library/DxePerformanceLib/DxePerformanceLib.inf
-  DxeServicesLib|MdePkg/Library/DxeServicesLib/DxeServicesLib.inf
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
 
 [LibraryClasses.common.DXE_RUNTIME_DRIVER]
@@ -241,6 +249,12 @@
 
   GCC:RELEASE_*_*_CC_FLAGS  = -DMDEPKG_NDEBUG
 
+  #
+  # Disable deprecated APIs.
+  #
+  RVCT:*_*_*_CC_FLAGS = -DDISABLE_NEW_DEPRECATED_INTERFACES
+  GCC:*_*_*_CC_FLAGS = -DDISABLE_NEW_DEPRECATED_INTERFACES
+
 ################################################################################
 #
 # Pcd Section - list of all EDK II PCD Entries defined by this Platform
@@ -248,10 +262,7 @@
 ################################################################################
 
 [PcdsFeatureFlag.common]
-  gEfiMdePkgTokenSpaceGuid.PcdComponentNameDisable|TRUE
-  gEfiMdePkgTokenSpaceGuid.PcdDriverDiagnosticsDisable|TRUE
-  gEfiMdePkgTokenSpaceGuid.PcdComponentName2Disable|TRUE
-  gEfiMdePkgTokenSpaceGuid.PcdDriverDiagnostics2Disable|TRUE
+  gEfiMdeModulePkgTokenSpaceGuid.PcdHiiOsRuntimeSupport|FALSE
 
   #
   # Control what commands are supported from the UI
@@ -274,13 +285,18 @@
 
   gEfiMdeModulePkgTokenSpaceGuid.PcdTurnOffUsbLegacySupport|TRUE
 
+[PcdsFeatureFlag.AARCH64]
+  #
+  # Activate AcpiSdtProtocol
+  #
+  gEfiMdeModulePkgTokenSpaceGuid.PcdInstallAcpiSdtProtocol|TRUE
+
 [PcdsFixedAtBuild.common]
   gEfiMdePkgTokenSpaceGuid.PcdMaximumUnicodeStringLength|1000000
   gEfiMdePkgTokenSpaceGuid.PcdMaximumAsciiStringLength|1000000
   gEfiMdePkgTokenSpaceGuid.PcdMaximumLinkedListLength|1000000
   gEfiMdePkgTokenSpaceGuid.PcdSpinLockTimeout|10000000
   gEfiMdePkgTokenSpaceGuid.PcdDebugClearMemoryValue|0xAF
-  gEfiMdePkgTokenSpaceGuid.PcdPerformanceLibraryPropertyMask|1
   gEfiMdePkgTokenSpaceGuid.PcdPostCodePropertyMask|0
   gEfiMdePkgTokenSpaceGuid.PcdUefiLibMaxPrintBufferSize|320
 
@@ -300,16 +316,16 @@
   #  DEBUG_WARN      0x00000002  // Warnings
   #  DEBUG_LOAD      0x00000004  // Load events
   #  DEBUG_FS        0x00000008  // EFI File system
-  #  DEBUG_POOL      0x00000010  // Alloc & Free's
-  #  DEBUG_PAGE      0x00000020  // Alloc & Free's
+  #  DEBUG_POOL      0x00000010  // Alloc & Free (pool)
+  #  DEBUG_PAGE      0x00000020  // Alloc & Free (page)
   #  DEBUG_INFO      0x00000040  // Informational debug messages
   #  DEBUG_DISPATCH  0x00000080  // PEI/DXE/SMM Dispatchers
   #  DEBUG_VARIABLE  0x00000100  // Variable
   #  DEBUG_BM        0x00000400  // Boot Manager
   #  DEBUG_BLKIO     0x00001000  // BlkIo Driver
-  #  DEBUG_NET       0x00004000  // SNI Driver
+  #  DEBUG_NET       0x00004000  // SNP Driver
   #  DEBUG_UNDI      0x00010000  // UNDI Driver
-  #  DEBUG_LOADFILE  0x00020000  // UNDI Driver
+  #  DEBUG_LOADFILE  0x00020000  // LoadFile
   #  DEBUG_EVENT     0x00080000  // Event messages
   #  DEBUG_GCD       0x00100000  // Global Coherency Database changes
   #  DEBUG_CACHE     0x00200000  // Memory range cachability changes
@@ -346,11 +362,6 @@
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiLoaderCode|20
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiLoaderData|0
 
-  #
-  # ARM Pcds
-  #
-  gArmTokenSpaceGuid.PcdArmUncachedMemoryMask|0x0000000000000000
-
 !if $(SECURE_BOOT_ENABLE) == TRUE
   # override the default values from SecurityPkg to ensure images from all sources are verified in secure boot
   gEfiSecurityPkgTokenSpaceGuid.PcdOptionRomImageVerificationPolicy|0x04
@@ -362,6 +373,24 @@
   # Set terminal type to TtyTerm, the value encoded is EFI_TTY_TERM_GUID
   gArmVirtTokenSpaceGuid.PcdTerminalTypeGuidBuffer|{0x80, 0x6d, 0x91, 0x7d, 0xb1, 0x5b, 0x8c, 0x45, 0xa4, 0x8f, 0xe2, 0x5f, 0xdd, 0x51, 0xef, 0x94}
 !endif
+
+  #
+  # Enable strict image permissions for all images. (This applies
+  # only to images that were built with >= 4 KB section alignment.)
+  #
+  gEfiMdeModulePkgTokenSpaceGuid.PcdImageProtectionPolicy|0x3
+
+  #
+  # Enable NX memory protection for all non-code regions, including OEM and OS
+  # reserved ones, with the exception of LoaderData regions, of which OS loaders
+  # (i.e., GRUB) may assume that its contents are executable.
+  #
+  gEfiMdeModulePkgTokenSpaceGuid.PcdDxeNxMemoryProtectionPolicy|0xC000000000007FD1
+
+  #
+  # Enable the non-executable DXE stack. (This gets set up by DxeIpl)
+  #
+  gEfiMdeModulePkgTokenSpaceGuid.PcdSetNxForStack|TRUE
 
 [PcdsFixedAtBuild.ARM]
   gEmbeddedTokenSpaceGuid.PcdPrePiCpuMemorySize|40
@@ -381,6 +410,11 @@
   MdeModulePkg/Universal/Network/Udp4Dxe/Udp4Dxe.inf
   MdeModulePkg/Universal/Network/UefiPxeBcDxe/UefiPxeBcDxe.inf
   MdeModulePkg/Universal/Network/IScsiDxe/IScsiDxe.inf
+
+  #
+  # Ramdisk support
+  #
+  MdeModulePkg/Universal/Disk/RamDiskDxe/RamDiskDxe.inf
 
   #
   # UEFI application (Shell Embedded Boot Loader)
@@ -405,3 +439,17 @@
       gEfiShellPkgTokenSpaceGuid.PcdShellLibAutoInitialize|FALSE
       gEfiMdePkgTokenSpaceGuid.PcdUefiLibMaxPrintBufferSize|8000
   }
+
+[Components.AARCH64]
+  #
+  # ACPI Support
+  #
+  MdeModulePkg/Universal/Acpi/AcpiTableDxe/AcpiTableDxe.inf {
+    <LibraryClasses>
+      NULL|EmbeddedPkg/Library/PlatformHasAcpiLib/PlatformHasAcpiLib.inf
+  }
+
+  #
+  # EBC support
+  #
+  MdeModulePkg/Universal/EbcDxe/EbcDxe.inf

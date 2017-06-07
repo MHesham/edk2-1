@@ -1,7 +1,8 @@
 /** @file
   Implementation of the boot file download function.
 
-Copyright (c) 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2015 - 2017, Intel Corporation. All rights reserved.<BR>
+(C) Copyright 2016 Hewlett Packard Enterprise Development LP<BR>
 This program and the accompanying materials are licensed and made available under 
 the terms and conditions of the BSD License that accompanies this distribution.  
 The full text of the license may be found at
@@ -167,18 +168,44 @@ HttpBootDhcp4ExtractUriInfo (
   // HttpOffer contains the boot file URL.
   //
   SelectOffer = &Private->OfferBuffer[SelectIndex].Dhcp4;
-  if ((SelectOffer->OfferType == HttpOfferTypeDhcpIpUri) || (SelectOffer->OfferType == HttpOfferTypeDhcpNameUriDns)) {
-    HttpOffer = SelectOffer;
+  if (Private->FilePathUri == NULL) {
+    //
+    // In Corporate environment, we need a HttpOffer.
+    //
+    if ((SelectOffer->OfferType == HttpOfferTypeDhcpIpUri) || 
+        (SelectOffer->OfferType == HttpOfferTypeDhcpIpUriDns) ||
+        (SelectOffer->OfferType == HttpOfferTypeDhcpNameUriDns)) {
+      HttpOffer = SelectOffer;
+    } else {
+      ASSERT (Private->SelectProxyType != HttpOfferTypeMax);
+      ProxyIndex = Private->OfferIndex[Private->SelectProxyType][0];
+      HttpOffer = &Private->OfferBuffer[ProxyIndex].Dhcp4;
+    }
+    Private->BootFileUriParser = HttpOffer->UriParser;
+    Private->BootFileUri = (CHAR8*) HttpOffer->OptList[HTTP_BOOT_DHCP4_TAG_INDEX_BOOTFILE]->Data;
   } else {
-    ASSERT (Private->SelectProxyType != HttpOfferTypeMax);
-    ProxyIndex = Private->OfferIndex[Private->SelectProxyType][0];
-    HttpOffer = &Private->OfferBuffer[ProxyIndex].Dhcp4;
+    //
+    // In Home environment the BootFileUri comes from the FilePath.
+    //
+    Private->BootFileUriParser = Private->FilePathUriParser;
+    Private->BootFileUri = Private->FilePathUri;
+  }
+
+  //
+  // Check the URI scheme.
+  //
+  Status = HttpBootCheckUriScheme (Private->BootFileUri);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "HttpBootDhcp4ExtractUriInfo: %r.\n", Status));
+    return Status;
   }
 
   //
   // Configure the default DNS server if server assigned.
   //
-  if ((SelectOffer->OfferType == HttpOfferTypeDhcpNameUriDns) || (SelectOffer->OfferType == HttpOfferTypeDhcpDns)) {
+  if ((SelectOffer->OfferType == HttpOfferTypeDhcpNameUriDns) || 
+      (SelectOffer->OfferType == HttpOfferTypeDhcpDns) ||
+      (SelectOffer->OfferType == HttpOfferTypeDhcpIpUriDns)) {
     Option = SelectOffer->OptList[HTTP_BOOT_DHCP4_TAG_INDEX_DNS_SERVER];
     ASSERT (Option != NULL);
     Status = HttpBootRegisterIp4Dns (
@@ -195,20 +222,13 @@ HttpBootDhcp4ExtractUriInfo (
   // Extract the port from URL, and use default HTTP port 80 if not provided.
   //
   Status = HttpUrlGetPort (
-             (CHAR8*) HttpOffer->OptList[HTTP_BOOT_DHCP4_TAG_INDEX_BOOTFILE]->Data,
-             HttpOffer->UriParser,
+             Private->BootFileUri,
+             Private->BootFileUriParser,
              &Private->Port
              );
   if (EFI_ERROR (Status) || Private->Port == 0) {
     Private->Port = 80;
   }
-  
-  //
-  // Record the URI of boot file from the selected HTTP offer.
-  //
-  Private->BootFileUriParser = HttpOffer->UriParser;
-  Private->BootFileUri = (CHAR8*) HttpOffer->OptList[HTTP_BOOT_DHCP4_TAG_INDEX_BOOTFILE]->Data;
-
   
   //
   // All boot informations are valid here.
@@ -244,6 +264,7 @@ HttpBootDhcp6ExtractUriInfo (
   EFI_DHCP6_PACKET_OPTION         *Option;
   EFI_IPv6_ADDRESS                IpAddr;
   CHAR8                           *HostName;
+  UINTN                           HostNameSize;
   CHAR16                          *HostNameStr;
   EFI_STATUS                      Status;
 
@@ -259,12 +280,36 @@ HttpBootDhcp6ExtractUriInfo (
   // HttpOffer contains the boot file URL.
   //
   SelectOffer = &Private->OfferBuffer[SelectIndex].Dhcp6;
-  if ((SelectOffer->OfferType == HttpOfferTypeDhcpIpUri) || (SelectOffer->OfferType == HttpOfferTypeDhcpNameUriDns)) {
-    HttpOffer = SelectOffer;
+  if (Private->FilePathUri == NULL) {
+    //
+    // In Corporate environment, we need a HttpOffer.
+    //
+    if ((SelectOffer->OfferType == HttpOfferTypeDhcpIpUri) ||
+        (SelectOffer->OfferType == HttpOfferTypeDhcpIpUriDns) ||
+        (SelectOffer->OfferType == HttpOfferTypeDhcpNameUriDns)) {
+      HttpOffer = SelectOffer;
+    } else {
+      ASSERT (Private->SelectProxyType != HttpOfferTypeMax);
+      ProxyIndex = Private->OfferIndex[Private->SelectProxyType][0];
+      HttpOffer = &Private->OfferBuffer[ProxyIndex].Dhcp6;
+    }
+    Private->BootFileUriParser = HttpOffer->UriParser;
+    Private->BootFileUri = (CHAR8*) HttpOffer->OptList[HTTP_BOOT_DHCP6_IDX_BOOT_FILE_URL]->Data;
   } else {
-    ASSERT (Private->SelectProxyType != HttpOfferTypeMax);
-    ProxyIndex = Private->OfferIndex[Private->SelectProxyType][0];
-    HttpOffer = &Private->OfferBuffer[ProxyIndex].Dhcp6;
+    //
+    // In Home environment the BootFileUri comes from the FilePath.
+    //
+    Private->BootFileUriParser = Private->FilePathUriParser;
+    Private->BootFileUri = Private->FilePathUri;
+  }
+
+  //
+  // Check the URI scheme.
+  //
+  Status = HttpBootCheckUriScheme (Private->BootFileUri);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "HttpBootDhcp6ExtractUriInfo: %r.\n", Status));
+    return Status;
   }
 
   //
@@ -274,11 +319,21 @@ HttpBootDhcp6ExtractUriInfo (
   if (EFI_ERROR (Status)) {
     return Status;
   }
+
+  //
+  // Register the IPv6 gateway address to the network device.
+  //
+  Status = HttpBootSetIp6Gateway (Private);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
   
   //
   // Configure the default DNS server if server assigned.
   //
-  if ((SelectOffer->OfferType == HttpOfferTypeDhcpNameUriDns) || (SelectOffer->OfferType == HttpOfferTypeDhcpDns)) {
+  if ((SelectOffer->OfferType == HttpOfferTypeDhcpNameUriDns) || 
+      (SelectOffer->OfferType == HttpOfferTypeDhcpDns) ||
+      (SelectOffer->OfferType == HttpOfferTypeDhcpIpUriDns)) {
     Option = SelectOffer->OptList[HTTP_BOOT_DHCP6_IDX_DNS_SERVER];
     ASSERT (Option != NULL);
     Status = HttpBootSetIp6Dns (
@@ -296,8 +351,8 @@ HttpBootDhcp6ExtractUriInfo (
   // whether can send message to HTTP Server Ip through the GateWay.
   //
   Status = HttpUrlGetIp6 (
-             (CHAR8*) HttpOffer->OptList[HTTP_BOOT_DHCP6_IDX_BOOT_FILE_URL]->Data,
-             HttpOffer->UriParser,
+             Private->BootFileUri,
+             Private->BootFileUriParser,
              &IpAddr
              );
   
@@ -306,21 +361,22 @@ HttpBootDhcp6ExtractUriInfo (
     // The Http server address is expressed by Name Ip, so perform DNS resolution
     //
     Status = HttpUrlGetHostName (
-               (CHAR8*) HttpOffer->OptList[HTTP_BOOT_DHCP6_IDX_BOOT_FILE_URL]->Data,
-               HttpOffer->UriParser,
+               Private->BootFileUri,
+               Private->BootFileUriParser,
                &HostName
                );
     if (EFI_ERROR (Status)) {
       return Status;
     }
-    
-    HostNameStr = AllocateZeroPool ((AsciiStrLen (HostName) + 1) * sizeof (CHAR16));
+
+    HostNameSize = AsciiStrSize (HostName);
+    HostNameStr = AllocateZeroPool (HostNameSize * sizeof (CHAR16));
     if (HostNameStr == NULL) {
       Status = EFI_OUT_OF_RESOURCES;
       goto Error;
     }
     
-    AsciiStrToUnicodeStr (HostName, HostNameStr);
+    AsciiStrToUnicodeStrS (HostName, HostNameStr, HostNameSize);
     Status = HttpBootDns (Private, HostNameStr, &IpAddr);
     FreePool (HostNameStr);
     if (EFI_ERROR (Status)) {
@@ -328,34 +384,19 @@ HttpBootDhcp6ExtractUriInfo (
     }  
   } 
   
-  CopyMem (&Private->ServerIp.v6, &IpAddr, sizeof (EFI_IPv6_ADDRESS));  
-    
-  //
-  // register the IPv6 gateway address to the network device.
-  //
-  Status = HttpBootSetIp6Gateway (Private);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
+  CopyMem (&Private->ServerIp.v6, &IpAddr, sizeof (EFI_IPv6_ADDRESS));
   
   //
   // Extract the port from URL, and use default HTTP port 80 if not provided.
   //
   Status = HttpUrlGetPort (
-             (CHAR8*) HttpOffer->OptList[HTTP_BOOT_DHCP6_IDX_BOOT_FILE_URL]->Data,
-             HttpOffer->UriParser,
+             Private->BootFileUri,
+             Private->BootFileUriParser,
              &Private->Port
              );
   if (EFI_ERROR (Status) || Private->Port == 0) {
     Private->Port = 80;
   }
-  
-  //
-  // Record the URI of boot file from the selected HTTP offer.
-  //
-  Private->BootFileUriParser = HttpOffer->UriParser;
-  Private->BootFileUri = (CHAR8*) HttpOffer->OptList[HTTP_BOOT_DHCP6_IDX_BOOT_FILE_URL]->Data;
-
   
   //
   // All boot informations are valid here.
@@ -426,6 +467,7 @@ HttpBootCreateHttpIo (
 {
   HTTP_IO_CONFIG_DATA          ConfigData;
   EFI_STATUS                   Status;
+  EFI_HANDLE                   ImageHandle;
 
   ASSERT (Private != NULL);
 
@@ -435,14 +477,16 @@ HttpBootCreateHttpIo (
     ConfigData.Config4.RequestTimeOut = HTTP_BOOT_REQUEST_TIMEOUT;
     IP4_COPY_ADDRESS (&ConfigData.Config4.LocalIp, &Private->StationIp.v4);
     IP4_COPY_ADDRESS (&ConfigData.Config4.SubnetMask, &Private->SubnetMask.v4);
+    ImageHandle = Private->Ip4Nic->ImageHandle;
   } else {
     ConfigData.Config6.HttpVersion    = HttpVersion11;
     ConfigData.Config6.RequestTimeOut = HTTP_BOOT_REQUEST_TIMEOUT;
     IP6_COPY_ADDRESS (&ConfigData.Config6.LocalIp, &Private->StationIp.v6);
+    ImageHandle = Private->Ip6Nic->ImageHandle;
   }
 
   Status = HttpIoCreateIo (
-             Private->Image,
+             ImageHandle,
              Private->Controller,
              Private->UsingIpv6 ? IP_VERSION_6 : IP_VERSION_4,
              &ConfigData,
@@ -454,81 +498,6 @@ HttpBootCreateHttpIo (
 
   Private->HttpCreated = TRUE;
   return EFI_SUCCESS;
-}
-
-/**
-  Get the file content from cached data.
-
-  @param[in]          Private         The pointer to the driver's private data.
-  @param[in]          Uri             Uri of the file to be retrieved from cache.
-  @param[in, out]     BufferSize      On input the size of Buffer in bytes. On output with a return
-                                      code of EFI_SUCCESS, the amount of data transferred to
-                                      Buffer. On output with a return code of EFI_BUFFER_TOO_SMALL,
-                                      the size of Buffer required to retrieve the requested file.
-  @param[out]         Buffer          The memory buffer to transfer the file to. IF Buffer is NULL,
-                                      then the size of the requested file is returned in
-                                      BufferSize.
-
-  @retval EFI_SUCCESS          Successfully created.
-  @retval Others               Failed to create HttpIo.
-
-**/
-EFI_STATUS
-HttpBootGetFileFromCache (
-  IN     HTTP_BOOT_PRIVATE_DATA   *Private,
-  IN     CHAR16                   *Uri,
-  IN OUT UINTN                    *BufferSize,
-     OUT UINT8                    *Buffer
-  )
-{
-  LIST_ENTRY                  *Entry;
-  LIST_ENTRY                  *Entry2;
-  HTTP_BOOT_CACHE_CONTENT     *Cache;
-  HTTP_BOOT_ENTITY_DATA       *EntityData;
-  UINTN                       CopyedSize;
-  
-  if (Uri == NULL || BufferSize == 0 || Buffer == NULL) {
-    return EFI_INVALID_PARAMETER;
-  }
-
-  NET_LIST_FOR_EACH (Entry, &Private->CacheList) {
-    Cache = NET_LIST_USER_STRUCT (Entry, HTTP_BOOT_CACHE_CONTENT, Link);
-    //
-    // Compare the URI to see whether we already have a cache for this file.
-    //
-    if ((Cache->RequestData != NULL) &&
-        (Cache->RequestData->Url != NULL) &&
-        (StrCmp (Uri, Cache->RequestData->Url) == 0)) 
-    {
-      //
-      // Hit cache, check buffer size.
-      //
-      if (*BufferSize < Cache->EntityLength) {
-        *BufferSize = Cache->EntityLength;
-        return EFI_BUFFER_TOO_SMALL;
-      }
-
-      //
-      // Fill data to buffer.
-      //
-      CopyedSize = 0;
-      NET_LIST_FOR_EACH (Entry2, &Cache->EntityDataList) {
-        EntityData = NET_LIST_USER_STRUCT (Entry2, HTTP_BOOT_ENTITY_DATA, Link);
-        if (*BufferSize > CopyedSize) {
-          CopyMem (
-            Buffer + CopyedSize,
-            EntityData->DataStart,
-            MIN (EntityData->DataLength, *BufferSize - CopyedSize)
-            );
-          CopyedSize += MIN (EntityData->DataLength, *BufferSize - CopyedSize);
-        }
-      }
-      *BufferSize = CopyedSize;
-      return EFI_SUCCESS;
-    }
-  }
-
-  return EFI_NOT_FOUND;
 }
 
 /**
@@ -610,6 +579,88 @@ HttpBootFreeCacheList (
 }
 
 /**
+  Get the file content from cached data.
+
+  @param[in]          Private         The pointer to the driver's private data.
+  @param[in]          Uri             Uri of the file to be retrieved from cache.
+  @param[in, out]     BufferSize      On input the size of Buffer in bytes. On output with a return
+                                      code of EFI_SUCCESS, the amount of data transferred to
+                                      Buffer. On output with a return code of EFI_BUFFER_TOO_SMALL,
+                                      the size of Buffer required to retrieve the requested file.
+  @param[out]         Buffer          The memory buffer to transfer the file to. IF Buffer is NULL,
+                                      then the size of the requested file is returned in
+                                      BufferSize.
+  @param[out]         ImageType       The image type of the downloaded file.
+
+  @retval EFI_SUCCESS          Successfully created.
+  @retval Others               Failed to create HttpIo.
+
+**/
+EFI_STATUS
+HttpBootGetFileFromCache (
+  IN     HTTP_BOOT_PRIVATE_DATA   *Private,
+  IN     CHAR16                   *Uri,
+  IN OUT UINTN                    *BufferSize,
+     OUT UINT8                    *Buffer,
+     OUT HTTP_BOOT_IMAGE_TYPE     *ImageType
+  )
+{
+  LIST_ENTRY                  *Entry;
+  LIST_ENTRY                  *Entry2;
+  HTTP_BOOT_CACHE_CONTENT     *Cache;
+  HTTP_BOOT_ENTITY_DATA       *EntityData;
+  UINTN                       CopyedSize;
+  
+  if (Uri == NULL || BufferSize == 0 || Buffer == NULL || ImageType == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  NET_LIST_FOR_EACH (Entry, &Private->CacheList) {
+    Cache = NET_LIST_USER_STRUCT (Entry, HTTP_BOOT_CACHE_CONTENT, Link);
+    //
+    // Compare the URI to see whether we already have a cache for this file.
+    //
+    if ((Cache->RequestData != NULL) &&
+        (Cache->RequestData->Url != NULL) &&
+        (StrCmp (Uri, Cache->RequestData->Url) == 0)) 
+    {
+      //
+      // Hit in cache, record image type.
+      //
+      *ImageType  = Cache->ImageType;
+
+      //
+      // Check buffer size.
+      //
+      if (*BufferSize < Cache->EntityLength) {
+        *BufferSize = Cache->EntityLength;
+        return EFI_BUFFER_TOO_SMALL;
+      }
+
+      //
+      // Fill data to buffer.
+      //
+      CopyedSize = 0;
+      NET_LIST_FOR_EACH (Entry2, &Cache->EntityDataList) {
+        EntityData = NET_LIST_USER_STRUCT (Entry2, HTTP_BOOT_ENTITY_DATA, Link);
+        if (*BufferSize > CopyedSize) {
+          CopyMem (
+            Buffer + CopyedSize,
+            EntityData->DataStart,
+            MIN (EntityData->DataLength, *BufferSize - CopyedSize)
+            );
+          CopyedSize += MIN (EntityData->DataLength, *BufferSize - CopyedSize);
+        }
+      }
+      *BufferSize = CopyedSize;
+      return EFI_SUCCESS;
+    }
+  }
+
+  return EFI_NOT_FOUND;
+}
+
+/**
   A callback function to intercept events during message parser.
 
   This function will be invoked during HttpParseMessageBody() with various events type. An error
@@ -688,6 +739,7 @@ HttpBootGetBootFileCallback (
   @param[out]      Buffer          The memory buffer to transfer the file to. IF Buffer is NULL,
                                    then the size of the requested file is returned in
                                    BufferSize.
+  @param[out]      ImageType       The image type of the downloaded file.
 
   @retval EFI_SUCCESS              The file was loaded.
   @retval EFI_INVALID_PARAMETER    BufferSize is NULL or Buffer Size is not NULL but Buffer is NULL.
@@ -703,14 +755,16 @@ HttpBootGetBootFile (
   IN     HTTP_BOOT_PRIVATE_DATA   *Private,
   IN     BOOLEAN                  HeaderOnly,
   IN OUT UINTN                    *BufferSize,
-     OUT UINT8                    *Buffer
+     OUT UINT8                    *Buffer,
+     OUT HTTP_BOOT_IMAGE_TYPE     *ImageType
   )
 {
   EFI_STATUS                 Status;
+  EFI_HTTP_STATUS_CODE       StatusCode;
   CHAR8                      *HostName;
   EFI_HTTP_REQUEST_DATA      *RequestData;
-  HTTP_IO_RESOPNSE_DATA      *ResponseData;
-  HTTP_IO_RESOPNSE_DATA      ResponseBody;
+  HTTP_IO_RESPONSE_DATA      *ResponseData;
+  HTTP_IO_RESPONSE_DATA      ResponseBody;
   HTTP_IO                    *HttpIo;
   HTTP_IO_HEADER             *HttpIoHeader;
   VOID                       *Parser;
@@ -718,12 +772,15 @@ HttpBootGetBootFile (
   UINTN                      ContentLength;
   HTTP_BOOT_CACHE_CONTENT    *Cache;
   UINT8                      *Block;
+  UINTN                      UrlSize;
   CHAR16                     *Url;
+  BOOLEAN                    IdentityMode;
+  UINTN                      ReceivedSize;
   
   ASSERT (Private != NULL);
   ASSERT (Private->HttpCreated);
 
-  if (BufferSize == NULL) {
+  if (BufferSize == NULL || ImageType == NULL) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -734,13 +791,14 @@ HttpBootGetBootFile (
   //
   // First, check whether we already cached the requested Uri.
   //
-  Url = AllocatePool ((AsciiStrLen (Private->BootFileUri) + 1) * sizeof (CHAR16));
+  UrlSize = AsciiStrSize (Private->BootFileUri);
+  Url = AllocatePool (UrlSize * sizeof (CHAR16));
   if (Url == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
-  AsciiStrToUnicodeStr (Private->BootFileUri, Url);
+  AsciiStrToUnicodeStrS (Private->BootFileUri, Url, UrlSize);
   if (!HeaderOnly) {
-    Status = HttpBootGetFileFromCache (Private, Url, BufferSize, Buffer);
+    Status = HttpBootGetFileFromCache (Private, Url, BufferSize, Buffer, ImageType);
     if (Status != EFI_NOT_FOUND) {
       FreePool (Url);
       return Status;
@@ -761,6 +819,7 @@ HttpBootGetBootFile (
       Status = EFI_OUT_OF_RESOURCES;
       goto ERROR_1;
     }
+    Cache->ImageType = ImageTypeMax;
     InitializeListHead (&Cache->EntityDataList);
   }
 
@@ -794,7 +853,7 @@ HttpBootGetBootFile (
   }
   Status = HttpBootSetHeader (
              HttpIoHeader,
-             HTTP_FIELD_NAME_HOST,
+             HTTP_HEADER_HOST,
              HostName
              );
   FreePool (HostName);
@@ -807,7 +866,7 @@ HttpBootGetBootFile (
   //
   Status = HttpBootSetHeader (
              HttpIoHeader,
-             HTTP_FIELD_NAME_ACCEPT,
+             HTTP_HEADER_ACCEPT,
              "*/*"
              );
   if (EFI_ERROR (Status)) {
@@ -819,7 +878,7 @@ HttpBootGetBootFile (
   //
   Status = HttpBootSetHeader (
              HttpIoHeader,
-             HTTP_FIELD_NAME_USER_AGENT,
+             HTTP_HEADER_USER_AGENT,
              HTTP_USER_AGENT_EFI_HTTP_BOOT
              );
   if (EFI_ERROR (Status)) {
@@ -836,11 +895,6 @@ HttpBootGetBootFile (
   }
   RequestData->Method = HeaderOnly ? HttpMethodHead : HttpMethodGet;
   RequestData->Url = Url;
-  if (RequestData->Url == NULL) {
-    Status = EFI_OUT_OF_RESOURCES;
-    goto ERROR_4;
-  }
-  AsciiStrToUnicodeStr (Private->BootFileUri, RequestData->Url);
 
   //
   // 2.3 Record the request info in a temp cache item.
@@ -872,7 +926,7 @@ HttpBootGetBootFile (
   //
   // 3.1 First step, use zero BodyLength to only receive the response headers.
   //
-  ResponseData = AllocateZeroPool (sizeof(HTTP_IO_RESOPNSE_DATA));
+  ResponseData = AllocateZeroPool (sizeof(HTTP_IO_RESPONSE_DATA));
   if (ResponseData == NULL) {
     Status = EFI_OUT_OF_RESOURCES;
     goto ERROR_4;
@@ -881,6 +935,25 @@ HttpBootGetBootFile (
              &Private->HttpIo,
              TRUE,
              ResponseData
+             );
+  if (EFI_ERROR (Status) || EFI_ERROR (ResponseData->Status)) {
+    if (EFI_ERROR (ResponseData->Status)) {
+      StatusCode = HttpIo->RspToken.Message->Data.Response->StatusCode;
+      HttpBootPrintErrorMessage (StatusCode);
+      Status = ResponseData->Status;
+    }
+    goto ERROR_5;
+  }
+
+  //
+  // Check the image type according to server's response.
+  //
+  Status = HttpBootCheckImageType (
+             Private->BootFileUri,
+             Private->BootFileUriParser,
+             ResponseData->HeaderCount,
+             ResponseData->Headers,
+             ImageType
              );
   if (EFI_ERROR (Status)) {
     goto ERROR_5;
@@ -891,6 +964,7 @@ HttpBootGetBootFile (
   //
   if (Cache != NULL) {
     Cache->ResponseData = ResponseData;
+    Cache->ImageType = *ImageType;
   }
   
   //
@@ -921,51 +995,100 @@ HttpBootGetBootFile (
   //
   Block = NULL;
   if (!HeaderOnly) {
-    ZeroMem (&ResponseBody, sizeof (HTTP_IO_RESOPNSE_DATA));
-    while (!HttpIsMessageComplete (Parser)) {
+    //
+    // 3.4.1, check whether we are in identity transfer-coding.
+    //
+    ContentLength = 0;
+    Status = HttpGetEntityLength (Parser, &ContentLength);
+    if (!EFI_ERROR (Status)) {
+      IdentityMode = TRUE;
+    } else {
+      IdentityMode = FALSE;
+    }
+
+    //
+    // 3.4.2, start the message-body download, the identity and chunked transfer-coding
+    // is handled in different path here.
+    //
+    ZeroMem (&ResponseBody, sizeof (HTTP_IO_RESPONSE_DATA));
+    if (IdentityMode) {
       //
-      // Allocate a block to hold the message-body, if caller doesn't provide
-      // a buffer, the block will be cached and we will allocate a new one here.
+      // In identity transfer-coding there is no need to parse the message body,
+      // just download the message body to the user provided buffer directly.
       //
-      if (Block == NULL || Context.BufferSize == 0) {
-        Block = AllocatePool (HTTP_BOOT_BLOCK_SIZE);
-        if (Block == NULL) {
-          Status = EFI_OUT_OF_RESOURCES;
+      ReceivedSize = 0;
+      while (ReceivedSize < ContentLength) {
+        ResponseBody.Body       = (CHAR8*) Buffer + ReceivedSize;
+        ResponseBody.BodyLength = *BufferSize - ReceivedSize;
+        Status = HttpIoRecvResponse (
+                   &Private->HttpIo,
+                   FALSE,
+                   &ResponseBody
+                   );
+        if (EFI_ERROR (Status) || EFI_ERROR (ResponseBody.Status)) {
+          if (EFI_ERROR (ResponseBody.Status)) {
+            Status = ResponseBody.Status;
+          }
           goto ERROR_6;
         }
-        Context.NewBlock = TRUE;
-        Context.Block = Block;
-      } else {
-        Context.NewBlock = FALSE;
+        ReceivedSize += ResponseBody.BodyLength;
       }
-
-      ResponseBody.Body       = (CHAR8*) Block;
-      ResponseBody.BodyLength = HTTP_BOOT_BLOCK_SIZE;
-      Status = HttpIoRecvResponse (
-                 &Private->HttpIo,
-                 FALSE,
-                 &ResponseBody
-                 );
-      if (EFI_ERROR (Status)) {
-        goto ERROR_6;
-      }
-
+    } else {
       //
-      // Parse the new received block of the message-body, the block will be saved in cache.
+      // In "chunked" transfer-coding mode, so we need to parse the received
+      // data to get the real entity content.
       //
-      Status = HttpParseMessageBody (
-                 Parser,
-                 ResponseBody.BodyLength,
-                 ResponseBody.Body
-                 );
-      if (EFI_ERROR (Status)) {
-        goto ERROR_6;
+      Block = NULL;
+      while (!HttpIsMessageComplete (Parser)) {
+        //
+        // Allocate a buffer in Block to hold the message-body.
+        // If caller provides a buffer, this Block will be reused in every HttpIoRecvResponse().
+        // Otherwise a buffer, the buffer in Block will be cached and we should allocate a new before
+        // every HttpIoRecvResponse().
+        //
+        if (Block == NULL || Context.BufferSize == 0) {
+          Block = AllocatePool (HTTP_BOOT_BLOCK_SIZE);
+          if (Block == NULL) {
+            Status = EFI_OUT_OF_RESOURCES;
+            goto ERROR_6;
+          }
+          Context.NewBlock = TRUE;
+          Context.Block = Block;
+        } else {
+          Context.NewBlock = FALSE;
+        }
+
+        ResponseBody.Body       = (CHAR8*) Block;
+        ResponseBody.BodyLength = HTTP_BOOT_BLOCK_SIZE;
+        Status = HttpIoRecvResponse (
+                   &Private->HttpIo,
+                   FALSE,
+                   &ResponseBody
+                   );
+        if (EFI_ERROR (Status) || EFI_ERROR (ResponseBody.Status)) {
+          if (EFI_ERROR (ResponseBody.Status)) {
+            Status = ResponseBody.Status;
+          }
+          goto ERROR_6;
+        }
+
+        //
+        // Parse the new received block of the message-body, the block will be saved in cache.
+        //
+        Status = HttpParseMessageBody (
+                   Parser,
+                   ResponseBody.BodyLength,
+                   ResponseBody.Body
+                   );
+        if (EFI_ERROR (Status)) {
+          goto ERROR_6;
+        }
       }
     }
   }
-  
+
   //
-  // 3.5 Message-body receive & parse is completed, get the file size.
+  // 3.5 Message-body receive & parse is completed, we should be able to get the file size now.
   //
   Status = HttpGetEntityLength (Parser, &ContentLength);
   if (EFI_ERROR (Status)) {
@@ -974,6 +1097,8 @@ HttpBootGetBootFile (
 
   if (*BufferSize < ContentLength) {
     Status = EFI_BUFFER_TOO_SMALL;
+  } else {
+    Status = EFI_SUCCESS;
   }
   *BufferSize = ContentLength;
 
@@ -989,7 +1114,7 @@ HttpBootGetBootFile (
     HttpFreeMsgParser (Parser);
   }
 
-  return EFI_SUCCESS;
+  return Status;
   
 ERROR_6:
   if (Parser != NULL) {
@@ -1021,3 +1146,4 @@ ERROR_1:
 
   return Status;
 }
+

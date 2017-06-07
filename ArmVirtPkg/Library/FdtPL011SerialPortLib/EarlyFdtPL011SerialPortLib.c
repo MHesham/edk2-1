@@ -66,12 +66,13 @@ SerialPortGetBaseAddress (
   INT32               Node, Prev;
   INT32               Len;
   CONST CHAR8         *Compatible;
+  CONST CHAR8         *NodeStatus;
   CONST CHAR8         *CompatibleItem;
   CONST UINT64        *RegProperty;
   UINTN               UartBase;
   RETURN_STATUS       Status;
 
-  DeviceTreeBase = (VOID *)(UINTN)FixedPcdGet64 (PcdDeviceTreeInitialBaseAddress);
+  DeviceTreeBase = (VOID *)(UINTN)PcdGet64 (PcdDeviceTreeInitialBaseAddress);
 
   if ((DeviceTreeBase == NULL) || (fdt_check_header (DeviceTreeBase) != 0)) {
     return 0;
@@ -98,6 +99,11 @@ SerialPortGetBaseAddress (
       CompatibleItem += 1 + AsciiStrLen (CompatibleItem)) {
 
       if (AsciiStrCmp (CompatibleItem, "arm,pl011") == 0) {
+        NodeStatus = fdt_getprop (DeviceTreeBase, Node, "status", &Len);
+        if (NodeStatus != NULL && AsciiStrCmp (NodeStatus, "okay") != 0) {
+          continue;
+        }
+
         RegProperty = fdt_getprop (DeviceTreeBase, Node, "reg", &Len);
         if (Len != 16) {
           return 0;
@@ -112,7 +118,13 @@ SerialPortGetBaseAddress (
 
         Status = PL011UartInitializePort (
                    UartBase,
-                   &BaudRate, &ReceiveFifoDepth, &Parity, &DataBits, &StopBits);
+                   FixedPcdGet32 (PL011UartClkInHz),
+                   &BaudRate,
+                   &ReceiveFifoDepth,
+                   &Parity,
+                   &DataBits,
+                   &StopBits
+                   );
         if (!EFI_ERROR (Status)) {
           return UartBase;
         }

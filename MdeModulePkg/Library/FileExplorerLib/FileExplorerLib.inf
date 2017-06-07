@@ -1,20 +1,20 @@
 ## @file
 #  library defines a set of interfaces for how to do file explorer.
 #  
-#  Copyright (c) 2011 - 2015, Intel Corporation. All rights reserved.<BR>
-#  This software and associated documentation (if any) is furnished
-#  under a license and may only be used or copied in accordance
-#  with the terms of the license. Except as permitted by such
-#  license, no part of this software or documentation may be
-#  reproduced, stored in a retrieval system, or transmitted in any
-#  form or by any means without the express written consent of
-#  Intel Corporation.
+#  Copyright (c) 2011 - 2017, Intel Corporation. All rights reserved.<BR>
+#  This program and the accompanying materials are licensed and made available under
+#  the terms and conditions of the BSD License that accompanies this distribution.
+#  The full text of the license may be found at
+#  http://opensource.org/licenses/bsd-license.php.
+#  
+#  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #  
 ##
-
 [Defines]
   INF_VERSION                    = 0x00010005
   BASE_NAME                      = FileExplorerLib
+  MODULE_UNI_FILE                = FileExplorerLib.uni
   FILE_GUID                      = 4FC9C630-0F90-4053-8F13-264CBD22FC58
   MODULE_TYPE                    = DXE_DRIVER
   VERSION_STRING                 = 1.0
@@ -47,6 +47,7 @@
   BaseMemoryLib
   DebugLib
   HiiLib
+  UefiHiiServicesLib
 
 [Guids]
   gEfiFileSystemVolumeLabelInfoIdGuid           ## CONSUMES ## GUID (Indicate the information type is volume)
@@ -54,7 +55,9 @@
  
 [Protocols]
   gEfiSimpleFileSystemProtocolGuid              ## CONSUMES
-  gEfiLoadFileProtocolGuid                      ## CONSUMES
   gEfiHiiConfigAccessProtocolGuid               ## CONSUMES
   gEfiFormBrowser2ProtocolGuid                  ## CONSUMES
   gEfiDevicePathToTextProtocolGuid              ## CONSUMES
+
+[Depex.common.DXE_DRIVER]
+  gEfiFormBrowser2ProtocolGuid AND gEfiHiiDatabaseProtocolGuid

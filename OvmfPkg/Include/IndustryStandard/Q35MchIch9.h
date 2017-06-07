@@ -19,6 +19,9 @@
 #define __Q35_MCH_ICH9_H__
 
 #include <Library/PciLib.h>
+#include <Uefi/UefiBaseType.h>
+#include <Uefi/UefiSpec.h>
+#include <Protocol/PciRootBridgeIo.h>
 
 //
 // Host Bridge Device ID (DID) value for Q35/MCH
@@ -32,6 +35,14 @@
 
 #define MCH_GGC               0x52
 #define MCH_GGC_IVD             BIT1
+
+#define MCH_PCIEXBAR_LOW      0x60
+#define MCH_PCIEXBAR_LOWMASK    0x0FFFFFFF
+#define MCH_PCIEXBAR_BUS_FF     0
+#define MCH_PCIEXBAR_EN         BIT0
+
+#define MCH_PCIEXBAR_HIGH     0x64
+#define MCH_PCIEXBAR_HIGHMASK   0xFFFFFFF0
 
 #define MCH_SMRAM             0x9D
 #define MCH_SMRAM_D_LCK         BIT4
@@ -66,6 +77,9 @@
 //
 #define POWER_MGMT_REGISTER_Q35(Offset) \
   PCI_LIB_ADDRESS (0, 0x1f, 0, (Offset))
+
+#define POWER_MGMT_REGISTER_Q35_EFI_PCI_ADDRESS(Offset) \
+  EFI_PCI_ADDRESS (0, 0x1f, 0, (Offset))
 
 #define ICH9_PMBASE               0x40
 #define ICH9_PMBASE_MASK            (BIT15 | BIT14 | BIT13 | BIT12 | BIT11 | \

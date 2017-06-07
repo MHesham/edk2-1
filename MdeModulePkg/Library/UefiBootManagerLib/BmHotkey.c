@@ -1,7 +1,8 @@
 /** @file
   Hotkey library functions.
 
-Copyright (c) 2011 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2011 - 2017, Intel Corporation. All rights reserved.<BR>
+(C) Copyright 2016 Hewlett Packard Enterprise Development LP<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -41,7 +42,7 @@ VOID                         *mBmTxtInExRegistration  = NULL;
 **/
 UINTN
 BmSizeOfKeyOption (
-  EFI_BOOT_MANAGER_KEY_OPTION  *KeyOption
+  IN CONST EFI_BOOT_MANAGER_KEY_OPTION  *KeyOption
   )
 {
   return OFFSET_OF (EFI_BOOT_MANAGER_KEY_OPTION, Keys)
@@ -60,8 +61,8 @@ BmSizeOfKeyOption (
 **/
 BOOLEAN
 BmIsKeyOptionValid (
-  IN EFI_BOOT_MANAGER_KEY_OPTION     *KeyOption,
-  IN UINTN                           KeyOptionSize
+  IN CONST EFI_BOOT_MANAGER_KEY_OPTION *KeyOption,
+  IN       UINTN                       KeyOptionSize
 )
 {
   UINT16   OptionName[BM_OPTION_NAME_LEN];
@@ -157,16 +158,15 @@ BmCollectKeyOptions (
 {
   UINTN                        Index;
   BM_COLLECT_KEY_OPTIONS_PARAM *Param;
-  EFI_BOOT_MANAGER_KEY_OPTION  *KeyOption;
+  VOID                         *KeyOption;
   UINT16                       OptionNumber;
   UINTN                        KeyOptionSize;
 
   Param = (BM_COLLECT_KEY_OPTIONS_PARAM *) Context;
 
   if (BmIsKeyOptionVariable (Name, Guid, &OptionNumber)) {
-    GetEfiGlobalVariable2 (Name, (VOID**) &KeyOption, &KeyOptionSize);
+    GetEfiGlobalVariable2 (Name, &KeyOption, &KeyOptionSize);
     ASSERT (KeyOption != NULL);
-    KeyOption->OptionNumber = OptionNumber;
     if (BmIsKeyOptionValid (KeyOption, KeyOptionSize)) {
       Param->KeyOptions = ReallocatePool (
                             Param->KeyOptionCount * sizeof (EFI_BOOT_MANAGER_KEY_OPTION),
@@ -178,12 +178,13 @@ BmCollectKeyOptions (
       // Insert the key option in order
       //
       for (Index = 0; Index < Param->KeyOptionCount; Index++) {
-        if (KeyOption->OptionNumber < Param->KeyOptions[Index].OptionNumber) {
+        if (OptionNumber < Param->KeyOptions[Index].OptionNumber) {
           break;
         }
       }
       CopyMem (&Param->KeyOptions[Index + 1], &Param->KeyOptions[Index], (Param->KeyOptionCount - Index) * sizeof (EFI_BOOT_MANAGER_KEY_OPTION));
-      CopyMem (&Param->KeyOptions[Index], KeyOption, BmSizeOfKeyOption (KeyOption));
+      CopyMem (&Param->KeyOptions[Index], KeyOption, KeyOptionSize);
+      Param->KeyOptions[Index].OptionNumber = OptionNumber;
       Param->KeyOptionCount++;
     }
     FreePool (KeyOption);
@@ -217,21 +218,6 @@ BmGetKeyOptions (
   *Count = Param.KeyOptionCount;
 
   return Param.KeyOptions;
-}
-
-/**
-  Callback function for event.
-  
-  @param    Event          Event for this callback function.
-  @param    Context        Context pass to this function.
-**/
-VOID
-EFIAPI
-BmEmptyFunction (
-  IN EFI_EVENT                Event,
-  IN VOID                     *Context
-  )
-{
 }
 
 /**
@@ -441,6 +427,55 @@ BmHotkeyCallback (
 }
 
 /**
+  Return the active Simple Text Input Ex handle array.
+  If the SystemTable.ConsoleInHandle is NULL, the function returns all
+  founded Simple Text Input Ex handles.
+  Otherwise, it just returns the ConsoleInHandle.
+
+  @param Count  Return the handle count.
+
+  @retval The active console handles.
+**/
+EFI_HANDLE *
+BmGetActiveConsoleIn (
+  OUT UINTN                             *Count
+  )
+{
+  EFI_STATUS                            Status;
+  EFI_HANDLE                            *Handles;
+
+  Handles = NULL;
+  *Count  = 0;
+
+  if (gST->ConsoleInHandle != NULL) {
+    Status = gBS->OpenProtocol (
+                    gST->ConsoleInHandle,
+                    &gEfiSimpleTextInputExProtocolGuid,
+                    NULL,
+                    gImageHandle,
+                    NULL,
+                    EFI_OPEN_PROTOCOL_TEST_PROTOCOL
+                    );
+    if (!EFI_ERROR (Status)) {
+      Handles = AllocateCopyPool (sizeof (EFI_HANDLE), &gST->ConsoleInHandle);
+      if (Handles != NULL) {
+        *Count = 1;
+      }
+    }
+  } else {
+    Status = gBS->LocateHandleBuffer (
+                    ByProtocol,
+                    &gEfiSimpleTextInputExProtocolGuid,
+                    NULL,
+                    Count,
+                    &Handles
+                    );
+  }
+
+  return Handles;
+}
+
+/**
   Unregister hotkey notify list.
 
   @param    Hotkey                Hotkey list.
@@ -461,13 +496,7 @@ BmUnregisterHotkeyNotify (
   EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL     *TxtInEx;
   VOID                                  *NotifyHandle;
 
-  gBS->LocateHandleBuffer (
-          ByProtocol,
-          &gEfiSimpleTextInputExProtocolGuid,
-          NULL,
-          &HandleCount,
-          &Handles
-          );
+  Handles = BmGetActiveConsoleIn (&HandleCount);
   for (Index = 0; Index < HandleCount; Index++) {
     Status = gBS->HandleProtocol (Handles[Index], &gEfiSimpleTextInputExProtocolGuid, (VOID **) &TxtInEx);
     ASSERT_EFI_ERROR (Status);
@@ -483,6 +512,10 @@ BmUnregisterHotkeyNotify (
         DEBUG ((EFI_D_INFO, "[Bds]UnregisterKeyNotify: %04x/%04x %r\n", Hotkey->KeyData[KeyIndex].Key.ScanCode, Hotkey->KeyData[KeyIndex].Key.UnicodeChar, Status));
       }
     }
+  }
+
+  if (Handles != NULL) {
+    FreePool (Handles);
   }
 
   return EFI_SUCCESS;
@@ -632,9 +665,11 @@ BmProcessKeyOption (
 
   KeyShiftStateCount = 0;
   BmGenerateKeyShiftState (0, KeyOption, EFI_SHIFT_STATE_VALID, KeyShiftStates, &KeyShiftStateCount);
-  ASSERT (KeyShiftStateCount <= sizeof (KeyShiftStates) / sizeof (KeyShiftStates[0]));
+  ASSERT (KeyShiftStateCount <= ARRAY_SIZE (KeyShiftStates));
 
   EfiAcquireLock (&mBmHotkeyLock);
+
+  Handles = BmGetActiveConsoleIn (&HandleCount);
 
   for (Index = 0; Index < KeyShiftStateCount; Index++) {
     Hotkey = AllocateZeroPool (sizeof (BM_HOTKEY));
@@ -651,13 +686,6 @@ BmProcessKeyOption (
     }
     InsertTailList (&mBmHotkeyList, &Hotkey->Link);
 
-    gBS->LocateHandleBuffer (
-            ByProtocol,
-            &gEfiSimpleTextInputExProtocolGuid,
-            NULL,
-            &HandleCount,
-            &Handles
-            );
     for (HandleIndex = 0; HandleIndex < HandleCount; HandleIndex++) {
       Status = gBS->HandleProtocol (Handles[HandleIndex], &gEfiSimpleTextInputExProtocolGuid, (VOID **) &TxtInEx);
       ASSERT_EFI_ERROR (Status);
@@ -665,6 +693,9 @@ BmProcessKeyOption (
     }
   }
 
+  if (Handles != NULL) {
+    FreePool (Handles);
+  }
   EfiReleaseLock (&mBmHotkeyLock);
 
   return EFI_SUCCESS;
@@ -855,7 +886,7 @@ EfiBootManagerStartHotkeyService (
   Status = gBS->CreateEvent (
                   EVT_NOTIFY_WAIT,
                   TPL_CALLBACK,
-                  BmEmptyFunction,
+                  EfiEventEmptyFunction,
                   NULL,
                   &mBmHotkeyTriggered
                   );
@@ -875,13 +906,20 @@ EfiBootManagerStartHotkeyService (
     BmProcessKeyOption (mBmContinueKeyOption);
   }
 
-  EfiCreateProtocolNotifyEvent (
-    &gEfiSimpleTextInputExProtocolGuid,
-    TPL_CALLBACK,
-    BmTxtInExCallback,
-    NULL,
-    &mBmTxtInExRegistration
-    );
+  //
+  // Hook hotkey on every future SimpleTextInputEx instance when
+  // SystemTable.ConsoleInHandle == NULL, which means the console
+  // manager (ConSplitter) is absent.
+  //
+  if (gST->ConsoleInHandle == NULL) {
+    EfiCreateProtocolNotifyEvent (
+      &gEfiSimpleTextInputExProtocolGuid,
+      TPL_CALLBACK,
+      BmTxtInExCallback,
+      NULL,
+      &mBmTxtInExRegistration
+      );
+  }
 
   Status = EfiCreateEventReadyToBootEx (
              TPL_CALLBACK,
@@ -890,7 +928,6 @@ EfiBootManagerStartHotkeyService (
              &Event
              );
   ASSERT_EFI_ERROR (Status);
-
 
   mBmHotkeyServiceStarted = TRUE;
   return Status;

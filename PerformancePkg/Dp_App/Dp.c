@@ -13,8 +13,8 @@
   Dp uses this information to group records in different ways.  It also uses
   timer information to calculate elapsed time for each measurement.
  
-  Copyright (c) 2009 - 2015, Intel Corporation. All rights reserved.<BR>
-  (C) Copyright 2015 Hewlett Packard Enterprise Development LP<BR>
+  Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+  (C) Copyright 2015-2016 Hewlett Packard Enterprise Development LP<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -25,12 +25,13 @@
 **/
 
 #include <Library/UefiApplicationEntryPoint.h>
+#include <Library/UefiBootServicesTableLib.h>
 #include <Library/ShellLib.h>
 #include <Library/BaseLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/DebugLib.h>
-#include <Library/TimerLib.h>
 #include <Library/UefiLib.h>
+#include <Library/UefiHiiServicesLib.h>
 #include <Library/HiiLib.h>
 #include <Library/PcdLib.h>
 
@@ -40,6 +41,16 @@
 #include "Dp.h"
 #include "Literals.h"
 #include "DpInternal.h"
+
+//
+// String token ID of help message text.
+// Shell supports to find help message in the resource section of an application image if
+// .MAN file is not found. This global variable is added to make build tool recognizes
+// that the help string is consumed by user and then build tool will add the string into
+// the resource section. Thus the application can use '-?' option to show help message in
+// Shell.
+//
+GLOBAL_REMOVE_IF_UNREFERENCED EFI_STRING_ID mDpStrEngHelpTokenId = STRING_TOKEN (STR_DP_HELP_INFORMATION);
 
 //
 /// Module-Global Variables
@@ -102,7 +113,7 @@ InitialShellParamList( void )
   //
   // Allocate one more for the end tag.
   //
-  ListLength = sizeof (ParamList) / sizeof (ParamList[0]) + 1;  
+  ListLength = ARRAY_SIZE (ParamList) + 1;  
   DpParamList = AllocatePool (sizeof (SHELL_PARAM_ITEM) * ListLength);
   ASSERT (DpParamList != NULL);
   
@@ -172,34 +183,15 @@ DumpStatistics( void )
 }
 
 /**
-  Initialize the cumulative data.
-
-**/
-VOID
-InitCumulativeData (
-  VOID
-  )
-{
-  UINTN                             Index;
-
-  for (Index = 0; Index < NumCum; ++Index) {
-    CumData[Index].Count = 0;
-    CumData[Index].MinDur = PERF_MAXDUR;
-    CumData[Index].MaxDur = 0;
-    CumData[Index].Duration = 0;
-  }
-}
-
-/**
   Dump performance data.
   
   @param[in]  ImageHandle     The image handle.
   @param[in]  SystemTable     The system table.
-  
+
   @retval EFI_SUCCESS            Command completed successfully.
   @retval EFI_INVALID_PARAMETER  Command usage error.
+  @retval EFI_ABORTED            The user aborts the operation.
   @retval value                  Unknown error.
-  
 **/
 EFI_STATUS
 EFIAPI
@@ -208,26 +200,27 @@ InitializeDp (
   IN EFI_SYSTEM_TABLE         *SystemTable
   )
 {
-  UINT64                    Freq;
-  UINT64                    Ticker;
-  UINT32                    ListIndex;
-  
-  LIST_ENTRY                *ParamPackage;
-  CONST CHAR16              *CmdLineArg;
-  EFI_STRING                StringPtr;
-  UINTN                     Number2Display;
+  PERFORMANCE_PROPERTY          *PerformanceProperty;
+  UINT32                        ListIndex;
 
-  EFI_STATUS                Status;
-  BOOLEAN                   SummaryMode;
-  BOOLEAN                   VerboseMode;
-  BOOLEAN                   AllMode;
-  BOOLEAN                   RawMode;
-  BOOLEAN                   TraceMode;
-  BOOLEAN                   ProfileMode;
-  BOOLEAN                   ExcludeMode;
-  BOOLEAN                   CumulativeMode;
-  CONST CHAR16              *CustomCumulativeToken;
-  PERF_CUM_DATA             *CustomCumulativeData;
+  LIST_ENTRY                    *ParamPackage;
+  CONST CHAR16                  *CmdLineArg;
+  EFI_STRING                    StringPtr;
+  UINTN                         Number2Display;
+
+  EFI_STATUS                    Status;
+  BOOLEAN                       SummaryMode;
+  BOOLEAN                       VerboseMode;
+  BOOLEAN                       AllMode;
+  BOOLEAN                       RawMode;
+  BOOLEAN                       TraceMode;
+  BOOLEAN                       ProfileMode;
+  BOOLEAN                       ExcludeMode;
+  BOOLEAN                       CumulativeMode;
+  CONST CHAR16                  *CustomCumulativeToken;
+  PERF_CUM_DATA                 *CustomCumulativeData;
+  UINTN                         NameSize;
+  EFI_HII_PACKAGE_LIST_HEADER   *PackageList;
 
   EFI_STRING                StringDpOptionQh;
   EFI_STRING                StringDpOptionLh;
@@ -272,15 +265,35 @@ InitializeDp (
   StringDpOptionLc = NULL;
   StringPtr        = NULL;
 
-  // Get DP's entry time as soon as possible.
-  // This is used as the Shell-Phase end time.
   //
-  Ticker  = GetPerformanceCounter ();
+  // Retrieve HII package list from ImageHandle
+  //
+  Status = gBS->OpenProtocol (
+                  ImageHandle,
+                  &gEfiHiiPackageListProtocolGuid,
+                  (VOID **) &PackageList,
+                  ImageHandle,
+                  NULL,
+                  EFI_OPEN_PROTOCOL_GET_PROTOCOL
+                  );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
 
-  // Register our string package with HII and return the handle to it.
   //
-  gHiiHandle = HiiAddPackages (&gEfiCallerIdGuid, ImageHandle, DPStrings, NULL);
+  // Publish HII package list to HII Database.
+  //
+  Status = gHiiDatabase->NewPackageList (
+                          gHiiDatabase,
+                          PackageList,
+                          NULL,
+                          &gHiiHandle
+                          );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
   ASSERT (gHiiHandle != NULL);
+  
 
   // Initial the command list
   //
@@ -373,8 +386,9 @@ InitializeDp (
     CustomCumulativeData->MaxDur = 0;
     CustomCumulativeData->Count  = 0;
     CustomCumulativeData->Duration = 0;
-    CustomCumulativeData->Name   = AllocateZeroPool (StrLen (CustomCumulativeToken) + 1);
-    UnicodeStrToAsciiStr (CustomCumulativeToken, CustomCumulativeData->Name);
+    NameSize = StrLen (CustomCumulativeToken) + 1;
+    CustomCumulativeData->Name   = AllocateZeroPool (NameSize);
+    UnicodeStrToAsciiStrS (CustomCumulativeToken, CustomCumulativeData->Name, NameSize);
   }
 
 /****************************************************************************
@@ -385,10 +399,16 @@ InitializeDp (
       //    StartCount = Value loaded into the counter when it starts counting
       //      EndCount = Value counter counts to before it needs to be reset
       //
-      Freq = GetPerformanceCounterProperties (&TimerInfo.StartCount, &TimerInfo.EndCount);
+      Status = EfiGetSystemConfigurationTable (&gPerformanceProtocolGuid, (VOID **) &PerformanceProperty);
+      if (EFI_ERROR (Status) || (PerformanceProperty == NULL)) {
+        PrintToken (STRING_TOKEN (STR_PERF_PROPERTY_NOT_FOUND));
+        goto Done;
+      }
 
       // Convert the Frequency from Hz to KHz
-      TimerInfo.Frequency = (UINT32)DivU64x32 (Freq, 1000);
+      TimerInfo.Frequency  = (UINT32)DivU64x32 (PerformanceProperty->Frequency, 1000);
+      TimerInfo.StartCount = PerformanceProperty->TimerStartValue;
+      TimerInfo.EndCount   = PerformanceProperty->TimerEndValue;
 
       // Determine in which direction the performance counter counts.
       TimerInfo.CountUp = (BOOLEAN) (TimerInfo.EndCount >= TimerInfo.StartCount);
@@ -443,7 +463,10 @@ InitializeDp (
         ProcessCumulative (CustomCumulativeData);
       } else if (AllMode) {
         if (TraceMode) {
-          DumpAllTrace( Number2Display, ExcludeMode);
+          Status = DumpAllTrace( Number2Display, ExcludeMode);
+          if (Status == EFI_ABORTED) {
+            goto Done;
+          }
         }
         if (ProfileMode) {
           DumpAllProfile( Number2Display, ExcludeMode);
@@ -451,7 +474,10 @@ InitializeDp (
       }
       else if (RawMode) {
         if (TraceMode) {
-          DumpRawTrace( Number2Display, ExcludeMode);
+          Status = DumpRawTrace( Number2Display, ExcludeMode);
+          if (Status == EFI_ABORTED) {
+            goto Done;
+          }
         }
         if (ProfileMode) {
           DumpRawProfile( Number2Display, ExcludeMode);
@@ -460,14 +486,24 @@ InitializeDp (
       else {
         //------------- Begin Cooked Mode Processing
         if (TraceMode) {
-          ProcessPhases ( Ticker );
+          ProcessPhases ();
           if ( ! SummaryMode) {
             Status = ProcessHandles ( ExcludeMode);
-            if ( ! EFI_ERROR( Status)) {
-              ProcessPeims (     );
-              ProcessGlobal (    );
-              ProcessCumulative (NULL);
+            if (Status == EFI_ABORTED) {
+              goto Done;
             }
+
+            Status = ProcessPeims ();
+            if (Status == EFI_ABORTED) {
+              goto Done;
+            }
+
+            Status = ProcessGlobal ();
+            if (Status == EFI_ABORTED) {
+              goto Done;
+            }
+
+            ProcessCumulative (NULL);
           }
         }
         if (ProfileMode) {
@@ -479,6 +515,8 @@ InitializeDp (
       }
     }
   }
+
+Done:
 
   //
   // Free the memory allocate from HiiGetString
@@ -508,6 +546,9 @@ InitializeDp (
   SafeFreePool (StringPtr);
   SafeFreePool (mPrintTokenBuffer);
 
+  if (ParamPackage != NULL) {
+    ShellCommandLineFreeVarList (ParamPackage);
+  }
   if (CustomCumulativeData != NULL) {
     SafeFreePool (CustomCumulativeData->Name);
   }
